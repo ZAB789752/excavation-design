@@ -2882,6 +2882,10 @@ class TaskManager:
         project.design_settings.design_basis_confirmed = True
         repo.save(project, actor=actor, action="autopilot.confirm_basis",
                   summary="计算书自动驾驶：按计算书确认设计基准")
+        tickets: list[str] = [autopilot.record_stage_ticket(
+            project_id=project.id, role_id="A1", stage_id="DESIGN.BASIS",
+            summary=f"解析 {len(ingested.get('applied') or [])} 项基准字段；文件 {filename}",
+            executor="design_basis_intake")]
 
         self._stage(task, 22, "建立基坑、钻孔与地质模型")
         project = repo.require(project.id)
@@ -2895,11 +2899,34 @@ class TaskManager:
         }
         repo.save(project, actor=actor, action="autopilot.record",
                   summary="计算书自动驾驶：记录解析结果与假设")
+        tickets.append(autopilot.record_stage_ticket(
+            project_id=project.id, role_id="A2", stage_id="DESIGN.INPUT",
+            summary=f"钻孔 {prepared.get('boreholeCount')}，地层 {prepared.get('layerCount')}，"
+                    f"平面 {prepared.get('planSizeM', {}).get('width')}×{prepared.get('planSizeM', {}).get('height')} m",
+            executor="geology_builder"))
+        tickets.append(autopilot.record_stage_ticket(
+            project_id=project.id, role_id="A3", stage_id="DESIGN.SCHEME",
+            summary=f"墙厚 {prepared.get('wallThicknessM')} m，支撑 {prepared.get('supportCount')} 根",
+            executor="design_service"))
 
         self._stage(task, 35, "生成方案并计算")
         calculation = self._run_calculation_full(task, {"mode": "design", "topN": 0})
+        summary = calculation.get("checkSummary") or {}
+        tickets.append(autopilot.record_stage_ticket(
+            project_id=project.id, role_id="A4", stage_id="DESIGN.CONSTRUCTION",
+            summary="施工阶段由计算任务生成（开挖与支撑工况）",
+            executor="construction_stages"))
+        tickets.append(autopilot.record_stage_ticket(
+            project_id=project.id, role_id="A5", stage_id="DESIGN.CALCULATION",
+            summary=f"检查 fail={summary.get('fail')} pass={summary.get('pass')} "
+                    f"manual={summary.get('manualReview')} warning={summary.get('warning')}",
+            executor="calculation_engine"))
         self._stage(task, 72, "配筋设计")
         rebar = self._run_rebar_design(task, {"mode": "balanced"})
+        tickets.append(autopilot.record_stage_ticket(
+            project_id=project.id, role_id="A7", stage_id="DESIGN.REINFORCEMENT",
+            summary="配筋方案生成并写回围护体系",
+            executor="detailing_agent"))
         # 配筋方案写回围护体系会变更计算输入合同，必须复算一次，成果包才不是旧算结果。
         self._stage(task, 80, "按配筋后的输入复算")
         self._run_calculation_full(task, {"mode": "verify", "topN": 0})
@@ -2907,6 +2934,10 @@ class TaskManager:
         package = self._run_coordinated_delivery_export(task, {
             "issueMode": "review", "rebarMode": "balanced", "includeIfcProfiles": True,
         })
+        tickets.append(autopilot.record_stage_ticket(
+            project_id=project.id, role_id="A8", stage_id="DESIGN.DELIVERABLES",
+            summary=f"评审版成果包：{package.get('filename') or package.get('name') or '已生成'}",
+            executor="delivery_agent"))
         return {
             "projectId": project.id,
             "filename": filename,
@@ -2916,6 +2947,7 @@ class TaskManager:
             "prepared": prepared,
             "calculationResultId": calculation.get("calculationResultId"),
             "package": package,
+            "tickets": tickets,
             "refreshProject": True,
         }
 

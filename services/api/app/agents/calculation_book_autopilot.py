@@ -206,3 +206,26 @@ def prepare_project(project, parsed: dict[str, Any], repo, *, actor: str) -> dic
             "计算书未给配筋，由平台按内力自动设计",
         ],
     }
+
+
+def record_stage_ticket(*, project_id: str, role_id: str, stage_id: str,
+                        summary: str, executor: str) -> str:
+    """为自动生成的每个阶段留一张票据：谁做的、做了什么、什么时候。
+
+    没有授权的动作不会进来；这里只记录真实执行过的阶段，不伪造派单。
+    """
+    from app.agents.store import AgentStore
+
+    store = AgentStore()
+    ticket = store.create_ticket(
+        project_id=project_id, conversation_id=None, thread_id=None,
+        role_id=role_id, stage_id=stage_id,
+        mandate={"allowedTools": ["autopilot.stage"], "formalConstructionIssue": False,
+                 "source": "calculation-book-autopilot"},
+        status="running", accept_mode="auto",
+    )
+    store.append_ticket_event(ticket["id"], "worker_started",
+                              {"executor": executor, "source": "autopilot"})
+    store.update_ticket(ticket["id"], status="done")
+    store.append_ticket_event(ticket["id"], "worker_done", {"summary": summary[:400]})
+    return ticket["id"]
