@@ -735,6 +735,11 @@ export const api = {
   releaseReadiness: (projectId: string, issueMode: 'review' | 'construction' = 'review') => request<Record<string, unknown>>(`/api/projects/${projectId}/export/release-readiness?issue_mode=${issueMode}`),
   runCandidateComparison: (projectId: string, topN = 3) => request<Record<string, unknown>[]>(`/api/projects/${projectId}/calculation/run-candidate-comparison?top_n=${topN}`, { method: 'POST' }),
   getChecks: (projectId: string) => request<{ checks: CheckResult[]; professionalReviewRequired: boolean }>(`/api/projects/${projectId}/calculation/checks`),
+  getCheckGroups: (projectId: string) => request<{
+    groups: Array<{ label: string; count: number; status: string; message: string;
+      statusBreakdown: Record<string, number>; rules: string[] }>;
+    summary: Record<string, number>; total: number;
+  }>(`/api/projects/${projectId}/calculation/checks/grouped`, { activity: { quiet: true, cacheTtlMs: 0 } }),
   getCalculationTrace: (projectId: string) => request<CalculationTraceResult>(`/api/projects/${projectId}/calculation/trace`),
   getWallLengthRedundancy: (projectId: string, mode = 'balanced') => request<Record<string, unknown>>(`/api/projects/${projectId}/wall-optimization/length-redundancy?mode=${mode}`),
   getExpertDesignReview: (projectId: string, mode = 'balanced') => request<Record<string, any>>(`/api/projects/${projectId}/expert-design/review?mode=${mode}`),

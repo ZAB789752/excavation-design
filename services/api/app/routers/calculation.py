@@ -396,6 +396,66 @@ def checks(project_id: str, repo: ProjectRepository = Depends(get_repository)) -
     return {"checks": unique, "summary": summary, "professionalReviewRequired": True}
 
 
+CHECK_FAMILIES = (
+    ("COLUMN", "立柱桩"),
+    ("SUPPORT", "支撑体系"),
+    ("WALE", "冠梁与围檩"),
+    ("CROWN", "冠梁与围檩"),
+    ("EMBEDMENT", "嵌固稳定"),
+    ("OVERALL", "整体稳定"),
+    ("HEAVE", "抗隆起"),
+    ("DEFORMATION", "墙体变形"),
+    ("SOIL-RESISTANCE", "土抗力模型"),
+    ("NODE", "节点构造"),
+    ("REBAR", "配筋与构造"),
+    ("CAGE", "配筋与构造"),
+    ("FLEXURE", "配筋与构造"),
+    ("SHEAR", "配筋与构造"),
+    ("STAGE", "施工阶段"),
+    ("INDUSTRIAL", "工艺与质量"),
+    ("QUALITY", "工艺与质量"),
+    ("LOCAL", "地质与规范适用"),
+    ("GEOLOG", "地质与规范适用"),
+)
+
+
+def _family_of(rule_id: str) -> str:
+    upper = str(rule_id).upper()
+    for token, label in CHECK_FAMILIES:
+        if token in upper:
+            return label
+    return "其他筛查"
+
+
+@router.get("/checks/grouped")
+def checks_grouped(project_id: str, repo: ProjectRepository = Depends(get_repository)) -> dict:
+    """把逐构件的检查项按规则族聚合成几行，避免界面被几十条同因项刷满。"""
+    payload = checks(project_id, repo)
+    groups: dict[str, dict] = {}
+    for item in payload["checks"]:
+        label = _family_of(item.get("ruleId"))
+        group = groups.setdefault(label, {"label": label, "count": 0, "statusBreakdown": {},
+                                          "message": "", "rules": [], "objectCount": 0})
+        group["count"] += 1
+        status = str(item.get("status") or "manual_review")
+        group["statusBreakdown"][status] = group["statusBreakdown"].get(status, 0) + 1
+        if not group["message"]:
+            group["message"] = str(item.get("message") or "")[:160]
+        if len(group["rules"]) < 5 and item.get("ruleId"):
+            group["rules"].append(str(item.get("ruleId"))[:80])
+        if item.get("objectId"):
+            group["objectCount"] += 1
+    severity = {"fail": 3, "warning": 2, "manual_review": 1, "pass": 0}
+    rows = []
+    for group in groups.values():
+        dominant = max(group["statusBreakdown"],
+                       key=lambda key: (severity.get(key, 0), group["statusBreakdown"][key]))
+        rows.append({**group, "status": dominant})
+    rows.sort(key=lambda row: (-severity.get(row["status"], 0), -row["count"]))
+    return {"groups": rows, "summary": payload["summary"], "total": len(payload["checks"]),
+            "professionalReviewRequired": True}
+
+
 @router.get("/trace")
 def calculation_trace(project_id: str, repo: ProjectRepository = Depends(get_repository)) -> dict:
     return build_calculation_trace(repo.require_workspace_with_latest_calculation(project_id))

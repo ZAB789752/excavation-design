@@ -115,6 +115,7 @@ export default function CoreProjectWorkspace({ project, onBack, onProjectChange 
   const [operationNotice, setOperationNotice] = useState<string>();
   const [inputEditor, setInputEditor] = useState<'boreholes' | 'geology' | 'excavation' | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<string>();
+  const [checkGroups, setCheckGroups] = useState<Array<{ label: string; count: number; status: string; message: string }>>([]);
   const [inspectedCandidate, setInspectedCandidate] = useState<SupportLayoutOptimizationCandidate>();
   const [visualMode, setVisualMode] = useState<'professional' | 'compact'>('professional');
   const [showRebar3d, setShowRebar3d] = useState(false);
@@ -314,6 +315,14 @@ export default function CoreProjectWorkspace({ project, onBack, onProjectChange 
 
   const workspaceLatest = current.calculationResults?.[current.calculationResults.length - 1];
   const latest = calculationEvidence?.id === workspaceLatest?.id ? calculationEvidence : workspaceLatest;
+  useEffect(() => {
+    if (!latest?.id) { setCheckGroups([]); return undefined; }
+    let dead = false;
+    api.getCheckGroups(current.id)
+      .then((value) => { if (!dead) setCheckGroups(value.groups ?? []); })
+      .catch(() => { if (!dead) setCheckGroups([]); });
+    return () => { dead = true; };
+  }, [current.id, current.updatedAt, latest?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -508,7 +517,7 @@ export default function CoreProjectWorkspace({ project, onBack, onProjectChange 
           <div><span>墙体弯矩</span><strong>{formatEngineeringValue(latest.governingValues?.maxWallMoment, 'moment')}</strong></div>
           <div><span>检查</span><strong>{failCount !== undefined && warningCount !== undefined ? `${failCount} Fail / ${warningCount} Warning` : '检查摘要不可用于当前方案'}</strong></div>
         </div>
-        <div className="coreCheckList">{(latest.checks ?? []).filter((item: any) => item.status !== 'pass').slice(0, 8).map((item: any, index: number) => <div key={String(item.ruleId ?? index)} className={String(item.status)}><strong>{String(item.ruleId ?? item.category ?? '检查')}</strong><span>{String(item.message ?? '')}</span></div>)}{!latest.checks?.length ? <div className="manual_review"><strong>检查明细未加载</strong></div> : resultCurrent && !(latest.checks ?? []).some((item: any) => item.status !== 'pass') ? <div className="pass"><strong>当前已加载检查未发现超限</strong></div> : null}</div>
+        {checkGroups.length ? <div className="coreCheckList">{checkGroups.slice(0, 8).map((group) => <div key={group.label} className={String(group.status)}><strong>{group.label} · {group.count} 项</strong><span>{group.message}</span></div>)}</div> : <div className="coreCheckList">{(latest.checks ?? []).filter((item: any) => item.status !== 'pass').slice(0, 8).map((item: any, index: number) => <div key={String(item.ruleId ?? index)} className={String(item.status)}><strong>{String(item.ruleId ?? item.category ?? '检查')}</strong><span>{String(item.message ?? '')}</span></div>)}{!latest.checks?.length ? <div className="manual_review"><strong>检查明细未加载</strong></div> : resultCurrent && !(latest.checks ?? []).some((item: any) => item.status !== 'pass') ? <div className="pass"><strong>当前已加载检查未发现超限</strong></div> : null}</div>}
         </> : <div className="coreEmpty">尚未生成当前方案计算结果。</div>}
         {visualMode === 'professional' ? <Suspense fallback={<div className="coreModuleFallback">正在加载完整内力包络、变形云图和规范校核明细…</div>}>
           <section className="coreProfessionalSection">
