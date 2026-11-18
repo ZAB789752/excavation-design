@@ -387,3 +387,47 @@
   overflow-y: auto; padding: 8px;
   background: #f8fafc; border: 1px solid #e5eaf0; border-radius: 8px;
 }
+
+/* 设置面板：表单式两列，别再挤成一条 */
+.agentApiCard {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+  padding: 18px 20px;
+  gap: 12px;
+}
+.agentApiCard header strong { font-size: 15px; }
+.agentApiCard header span { font-size: 11.5px; }
+.agentApiCard label {
+  grid-template-columns: 116px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.agentApiCard label input,
+.agentApiCard label select,
+.agentApiSelect {
+  height: 34px;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12.5px;
+  padding: 0 10px;
+}
+.agentApiToggle {
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 6px 0;
+  line-height: 1.55;
+  color: #334155;
+}
+.agentApiToggle input { margin-top: 2px; }
+.agentApiSectionTitle {
+  margin-top: 8px;
+  padding-top: 12px;
+  font-size: 12px;
+  letter-spacing: .06em;
+}
+.agentApiCalls li { font-size: 11.5px; padding: 6px 8px; }
+.agentApiCard footer { gap: 10px; margin-top: 6px; }
+.agentApiCard footer button { height: 32px; padding: 0 16px; font-size: 12.5px; }
