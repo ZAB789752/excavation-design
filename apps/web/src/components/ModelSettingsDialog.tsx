@@ -126,12 +126,9 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
                 <label className="msField">
                   <span>模型</span>
                   <select value={model} onChange={(event) => setModel(event.target.value)}>
-                    <option value="deepseek-chat">Flash · deepseek-chat</option>
-                    <option value="deepseek-reasoner">Pro · deepseek-reasoner</option>
+                    <option value="deepseek-chat">Flash</option>
+                    <option value="deepseek-reasoner">Pro</option>
                   </select>
-                  <small className="msHintTextInline">
-                    Flash 是通用对话模型（快、便宜），Pro 是推理模型（慢、更强）；括号后的英文才是真正发给接口的 ID
-                  </small>
                 </label>
                 <label className="msField">
                   <span className="msReq">API 密钥</span>
