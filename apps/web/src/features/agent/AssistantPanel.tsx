@@ -675,7 +675,11 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
                     </label>
                   </div>
                 </div>
-                <p className="agentApiHint">{modelTier === 'pro' ? (apiModelReasoning || apiModelFast) : apiModelFast}</p>
+                <p className="agentApiHint">
+                  {modelTier === 'pro' && (!apiModelReasoning || apiModelReasoning === apiModelFast)
+                    ? 'Pro 未单独配置，当前与 Flash 相同'
+                    : (modelTier === 'pro' ? apiModelReasoning : apiModelFast)}
+                </p>
                 <label>API Key
                   <input type="password" value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)}
                     placeholder={apiCfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
