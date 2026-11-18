@@ -99,3 +99,5 @@
 @media (max-width: 640px) {
   .msFootNote { display: none; }
 }
+
+.msHintTextInline { font-size: 11px; color: #94a3b8; line-height: 1.5; }
