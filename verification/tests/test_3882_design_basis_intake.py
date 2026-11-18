@@ -71,11 +71,14 @@ def test_model_provider_not_configured_falls_back_honestly():
 
 def test_missing_summary_shrinks_after_fields_applied():
     fresh = intake.missing_summary(_Project())
-    assert fresh['count'] == len(intake.REQUIRED)
-    assert '还缺' in fresh['text']
+    # 缺项分两类：真没填（missing）与沿用模板默认值（defaults），合起来覆盖全部必填项
+    assert fresh['count'] + fresh['defaultCount'] == len(intake.REQUIRED)
+    assert fresh['count'] > 0 and '缺' in fresh['text']
     filled = intake.missing_summary(_Project([
         'surcharge', 'excavationSafetyLevel', 'importanceFactor', 'defaultConcreteGrade']))
-    assert filled['count'] < fresh['count']
+    outstanding_fresh = fresh['count'] + fresh['defaultCount']
+    outstanding = filled['count'] + filled['defaultCount']
+    assert outstanding < outstanding_fresh
     assert '施工荷载' not in filled['text']
 
 
