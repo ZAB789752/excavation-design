@@ -940,6 +940,8 @@ class TaskManager:
             result = self._run_formal_drawing_export(task, payload)
         elif task.operation == "calculation_book_autopilot":
             result = self._run_calculation_book_autopilot(task, payload)
+        elif task.operation == "calculation_book_batch":
+            result = self._run_calculation_book_batch(task, payload)
         elif task.operation == "export_coordinated_delivery":
             result = self._run_coordinated_delivery_export(task, payload)
         elif task.operation == "export_json":
@@ -2921,6 +2923,16 @@ class TaskManager:
             summary=f"检查 fail={summary.get('fail')} pass={summary.get('pass')} "
                     f"manual={summary.get('manualReview')} warning={summary.get('warning')}",
             executor="calculation_engine"))
+        if payload.get("minimal"):
+            tickets.append(autopilot.record_stage_ticket(
+                project_id=project.id, role_id="A8", stage_id="DESIGN.DELIVERABLES",
+                summary="批量模式：仅计算，不生成成果包", executor="delivery_agent"))
+            return {
+                "projectId": project.id, "filename": filename, "parsed": parsed,
+                "prepared": prepared, "calculationResultId": calculation.get("calculationResultId"),
+                "checkSummary": summary, "tickets": tickets, "minimal": True,
+                "refreshProject": True,
+            }
         self._stage(task, 72, "配筋设计")
         rebar = self._run_rebar_design(task, {"mode": "balanced"})
         tickets.append(autopilot.record_stage_ticket(
@@ -2963,6 +2975,67 @@ class TaskManager:
             "p3": p3,
             "refreshProject": True,
         }
+
+    def _run_calculation_book_batch(self, task: TaskRecord, payload: dict[str, Any]) -> dict[str, Any]:
+        """同一本计算书按剖面逐个建模计算，出一张对照表（不做配筋与出包）。"""
+        import csv
+        import time
+        from pathlib import Path as _Path
+
+        from app.agents import calculation_book_autopilot as autopilot
+        from app.schemas.domain import Project
+
+        source = _Path(str(payload.get("sourcePath") or ""))
+        if not source.is_file():
+            raise ValueError("计算书文件不存在或未上传")
+        filename = str(payload.get("filename") or source.name)
+        actor = str(payload.get("actor") or "local-development")
+        repo = self._repo()
+
+        text = autopilot.extract_text(source.read_bytes())
+        titles = [block["title"] for block in autopilot._layer_blocks(text) if block["title"]]
+        requested = payload.get("sections") or titles
+        rows: list[dict[str, Any]] = []
+        for index, section in enumerate(requested, start=1):
+            self._stage(task, min(95, int(index * 100 / max(1, len(requested)))),
+                        f"剖面 {section}（{index}/{len(requested)}）")
+            project = repo.create(Project(name=f"{source.stem[:40]}｜{section}"), actor=actor)
+            parent_task_project = task.project_id
+            task.project_id = project.id
+            try:
+                result = self._run_calculation_book_autopilot(task, {
+                    "sourcePath": str(source), "filename": filename,
+                    "projectId": project.id, "section": section, "actor": actor, "minimal": True,
+                })
+                detail = repo.require(project.id)
+                calc = detail.calculation_results[-1] if detail.calculation_results else None
+                summary = result.get("checkSummary") or (calc.check_summary if calc else {}) or {}
+                values = calc.governing_values if calc else None
+                rows.append({
+                    "section": section, "projectId": project.id,
+                    "layers": len((result.get("parsed") or {}).get("layers") or []),
+                    "fail": summary.get("fail"), "pass": summary.get("pass"),
+                    "manual": summary.get("manualReview"), "warning": summary.get("warning"),
+                    "displacementMm": getattr(values, "max_displacement", None),
+                    "supportAxialKn": getattr(values, "max_support_axial_force", None),
+                    "wallMomentKnm": getattr(values, "max_wall_moment", None),
+                    "status": "ok", "error": "",
+                })
+            except Exception as exc:
+                rows.append({"section": section, "projectId": project.id, "status": "failed",
+                             "error": f"{type(exc).__name__}: {exc}"[:200]})
+            finally:
+                task.project_id = parent_task_project
+        out_dir = _Path(__file__).resolve().parents[2] / "exports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = out_dir / f"book-sections-summary-{time.strftime('%Y%m%dT%H%M%S')}.csv"
+        fields = list(rows[0].keys()) if rows else ["section"]
+        with csv_path.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+        return {"filename": filename, "sectionCount": len(rows), "rows": rows,
+                "csv": str(csv_path), "refreshProject": False}
 
     def _run_coordinated_delivery_export(self, task: TaskRecord, payload: dict[str, Any]) -> dict[str, Any]:
         from app.services.delivery_package import export_coordinated_delivery_package
@@ -3120,6 +3193,7 @@ class TaskManager:
             "export_formal_drawings": "导出正式图纸发行包",
             "export_coordinated_delivery": "导出协同成果交付包",
             "calculation_book_autopilot": "计算书自动生成（解析→建模→计算→配筋→成果包）",
+            "calculation_book_batch": "计算书多剖面批量计算（逐剖面建模→计算→汇总表）",
             "export_json": "导出 JSON 数据",
             "export_trace": "导出计算追溯链",
             "export_issue_report": "导出问题清单与完成度评估",

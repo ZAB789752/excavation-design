@@ -249,6 +249,39 @@ async def calculation_book_autopilot(request:Request,
     }
 
 
+@router.post('/calculation-book/batch')
+async def calculation_book_batch(request:Request,
+                                 file:UploadFile=File(...),
+                                 sections:str|None=Form(default=None)):
+    """按剖面批量：逐剖面建模计算，出一张对照表（不配筋、不出包）。"""
+    identity=_actor(request)
+    if ROLE_RANK.get(identity.role,0)<ROLE_RANK['designer']:
+        raise HTTPException(403,detail='批量计算要求设计人员权限')
+    data=await file.read()
+    if not data or not data.lstrip()[:5].startswith(b'%PDF'):
+        raise HTTPException(400,detail='请上传有效的计算书 PDF')
+    from pathlib import Path
+    from uuid import uuid4
+    from app.tasks.manager import task_manager
+    from app.schemas.domain import Project
+    from app.storage.repository import ProjectRepository, shared_project_store
+
+    filename=file.filename or 'calculation-book.pdf'
+    inbox=Path(__file__).resolve().parents[2]/'runtime'/'inbox'
+    inbox.mkdir(parents=True,exist_ok=True)
+    target=inbox/f"batch-{uuid4().hex[:12]}.pdf"
+    target.write_bytes(data)
+
+    repo=ProjectRepository(store=shared_project_store())
+    project=repo.create(Project(name=f'{Path(filename).stem[:40]}（多剖面批量）'),actor=identity.actor)
+    payload={'projectId':project.id,'sourcePath':str(target),'filename':filename,'actor':identity.actor}
+    if sections:
+        payload['sections']=[item.strip() for item in sections.split(',') if item.strip()]
+    task=task_manager.submit(project.id,'calculation_book_batch',payload)
+    return {'taskId':task.id,'projectId':project.id,'sections':payload.get('sections') or '自动识别',
+            'poll':'GET /api/tasks/{taskId}','formalConstructionIssue':False}
+
+
 @router.get('/calculation-book/status')
 def calculation_book_status(request:Request,project_id:str=Query(min_length=1,max_length=100)):
     """计算书流水线走到哪、卡在什么上、当前计算结论是什么。"""
