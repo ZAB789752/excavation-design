@@ -203,7 +203,8 @@ async def run_calculation_book(request:Request,
 async def calculation_book_autopilot(request:Request,
                                     file:UploadFile=File(...),
                                     project_id:str|None=Form(default=None),
-                                    section:str|None=Form(default=None)):
+                                    section:str|None=Form(default=None),
+                                    run_p3:str|None=Form(default=None)):
     """把计算书丢给 Agent：解析 → 建项目 → 建模 → 计算 → 配筋 → 成果包。"""
     identity=_actor(request)
     if ROLE_RANK.get(identity.role,0)<ROLE_RANK['designer']:
@@ -238,6 +239,7 @@ async def calculation_book_autopilot(request:Request,
         'projectId':project.id,
         'sourcePath':str(target),'filename':filename,'actor':identity.actor,
         'section':section,
+        'runP3':str(run_p3).lower() in ('1','true','yes'),
     })
     return {
         'taskId':task.id,'projectId':project.id,'filename':filename,

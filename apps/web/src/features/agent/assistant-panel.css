@@ -244,3 +244,24 @@
   outline: 2px dashed #1D9E75;
   outline-offset: 3px;
 }
+
+.agentDockSection {
+  max-width: 118px;
+  height: 28px;
+  border: 1px solid rgba(31, 58, 95, 0.18);
+  border-radius: 6px;
+  background: #fff;
+  color: #1f3a5f;
+  font-size: 11px;
+  padding: 0 4px;
+}
+
+.agentDockP3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: #1f3a5f;
+  white-space: nowrap;
+}
+.agentDockP3 input { margin: 0; }

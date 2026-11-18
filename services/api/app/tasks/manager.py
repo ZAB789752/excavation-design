@@ -2938,6 +2938,18 @@ class TaskManager:
             project_id=project.id, role_id="A8", stage_id="DESIGN.DELIVERABLES",
             summary=f"评审版成果包：{package.get('filename') or package.get('name') or '已生成'}",
             executor="delivery_agent"))
+        p3 = None
+        if payload.get("runP3"):
+            self._stage(task, 94, "P3 深化闭环（预埋件与套筒）")
+            try:
+                p3 = self._run_p3_detailing_closure(task, {})
+                summary_text = str(p3.get("status") or "done") if isinstance(p3, dict) else "done"
+            except Exception as exc:
+                p3 = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"[:200]}
+                summary_text = "failed"
+            tickets.append(autopilot.record_stage_ticket(
+                project_id=project.id, role_id="A7", stage_id="DESIGN.REINFORCEMENT",
+                summary=f"P3 深化：{summary_text}", executor="detailing_agent"))
         return {
             "projectId": project.id,
             "filename": filename,
@@ -2948,6 +2960,7 @@ class TaskManager:
             "calculationResultId": calculation.get("calculationResultId"),
             "package": package,
             "tickets": tickets,
+            "p3": p3,
             "refreshProject": True,
         }
 

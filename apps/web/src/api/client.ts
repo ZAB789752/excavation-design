@@ -518,9 +518,11 @@ export const api = {
     `/api/agents/runs/${encodeURIComponent(runId)}/overview`, { activity: { quiet: true, cacheTtlMs: 0 } }),
   agentFrozenResults: () => request<{ results: AgentFrozenResult[]; formalConstructionIssue: boolean }>(
     '/api/agents/frozen-results', { activity: { quiet: true, cacheTtlMs: 0 } }),
-  startCalculationBookAutopilot: (projectId: string, file: File) => {
+  startCalculationBookAutopilot: (projectId: string, file: File, section?: string, runP3?: boolean) => {
     const form = new FormData();
     form.append('project_id', projectId);
+    if (section) form.append('section', section);
+    if (runP3) form.append('run_p3', 'true');
     form.append('file', file);
     return request<{ taskId: string; projectId: string }>('/api/agents/calculation-book/autopilot', {
       method: 'POST', body: form, timeoutMs: 180000, responseIdleTimeoutMs: 180000,

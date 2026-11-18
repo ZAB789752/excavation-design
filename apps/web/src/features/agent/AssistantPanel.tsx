@@ -79,6 +79,8 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [attachBusy, setAttachBusy] = useState(false);
   const [attachStage, setAttachStage] = useState('');
   const [dropActive, setDropActive] = useState(false);
+  const [section, setSection] = useState('');
+  const [runP3, setRunP3] = useState(false);
   const [petOffset, setPetOffset] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || 'null');
@@ -402,7 +404,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     setAttachBusy(true); setError(''); setAttachStage('正在读取文件…');
     try {
       if (file.name.toLowerCase().endsWith('.pdf')) {
-        const started = await api.startCalculationBookAutopilot(projectId, file);
+        const started = await api.startCalculationBookAutopilot(projectId, file, section || undefined, runP3);
         setAttachStage('已提交，正在解析计算书…');
         let status = await api.taskStatus(started.taskId);
         for (let i = 0; i < 300 && !['success', 'failed', 'cancelled'].includes(status.status); i += 1) {
@@ -449,7 +451,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       setError(text);
       pushNotice('error', '文件录入失败', text);
     } finally { setAttachBusy(false); setAttachStage(''); }
-  }, [projectId, activeId, reloadMessages, refreshGap, reportRouter, pushNotice, onProjectChanged]);
+  }, [projectId, activeId, reloadMessages, refreshGap, reportRouter, pushNotice, onProjectChanged, section, runP3]);
 
   const handleFileDragOver = useCallback((event: React.DragEvent) => {
     if (!Array.from(event.dataTransfer.types).includes('Files')) return;
@@ -554,6 +556,28 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           </div>
 
           <footer className="agentDockCompose agentDockComposeSlim">
+            <select
+              className="agentDockSection"
+              value={section}
+              onChange={(event) => setSection(event.target.value)}
+              title="计算书里的剖面；留空按 2-2 自动选"
+            >
+              <option value="">剖面：自动(2-2)</option>
+              <option value="1-1">1-1</option>
+              <option value="1'-1'">1'-1'</option>
+              <option value="2-2">2-2</option>
+              <option value="3-3">3-3</option>
+              <option value="3'-3'">3'-3'</option>
+              <option value="4-4">4-4</option>
+              <option value="4'-4'">4'-4'</option>
+              <option value="5-5">5-5</option>
+              <option value="5'-5'">5'-5'</option>
+              <option value="出土口">出土口</option>
+            </select>
+            <label className="agentDockP3" title="出包后继续跑 1203 项预埋件与套筒深化">
+              <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
+              P3
+            </label>
             <button
               type="button"
               className="agentDockAttach"
