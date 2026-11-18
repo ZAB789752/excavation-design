@@ -1,3 +1,4 @@
+import ModelSettingsDialog from '../components/ModelSettingsDialog';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import type { Project, ProjectSummary } from '../types/domain';
@@ -136,10 +137,13 @@ export default function ProjectsPage({ onOpen }: { onOpen: (project: Project) =>
     } finally { setDeletingId(undefined); }
   }
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   return (
     <main className="page" aria-busy={refreshing || creating || Boolean(openingId)}>
       <section className="card">
-        <div className="panelTitleRow"><div><h2>项目列表</h2><p className="small">列表优先使用本地摘要即时显示，服务器数据在后台刷新。</p></div>{refreshing ? <span className="inlineBusy"><i />同步中</span> : <span className="statusTag pass">已同步</span>}</div>
+        <div className="panelTitleRow"><div><h2>项目列表</h2><p className="small">列表优先使用本地摘要即时显示，服务器数据在后台刷新。</p></div>{refreshing ? <span className="inlineBusy"><i />同步中</span> : <span className="statusTag pass">已同步</span>}
+          <button type="button" className="secondary" onClick={() => setSettingsOpen(true)}>模型设置</button></div>
         <div className="toolbar">
           <input aria-label="项目名称" value={name} onChange={(event) => setName(event.target.value)} disabled={creating} />
           <input aria-label="项目地点" placeholder="项目地点" value={location} onChange={(event) => setLocation(event.target.value)} disabled={creating} />
@@ -173,6 +177,7 @@ export default function ProjectsPage({ onOpen }: { onOpen: (project: Project) =>
           </tbody>
         </table>
       </section>
+      {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
     </main>
   );
 }

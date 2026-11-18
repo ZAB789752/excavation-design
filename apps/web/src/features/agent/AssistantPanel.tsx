@@ -14,11 +14,8 @@ type Props = {
   projectName?: string;
   onProjectChanged?: () => void;
 };
+
 type Notice = { id: number; kind: 'alert' | 'error'; title: string; text: string };
-type ModelConfig = {
-  enabled: boolean; configured: boolean; keyHint?: string; source?: string;
-  baseUrl?: string; modelSlots?: Record<string, string>; allowedHosts?: string[];
-};
 type Gap = { text: string; items: string[]; tone: 'ok' | 'warn' | 'error' };
 
 const POLL_INTERVAL_MS = 15000;
@@ -92,18 +89,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [batchAll, setBatchAll] = useState(() => {
     try { return localStorage.getItem('pitguard-upload-batch') === '1'; } catch { return false; }
   });
-  const [apiOpen, setApiOpen] = useState(false);
-  const [apiCfg, setApiCfg] = useState<ModelConfig | null>(null);
-  const [apiBaseUrl, setApiBaseUrl] = useState('');
-  const [apiModelFast, setApiModelFast] = useState('');
-  const [apiModelReasoning, setApiModelReasoning] = useState('');
-  const [apiHosts, setApiHosts] = useState('');
-  const [apiKeyDraft, setApiKeyDraft] = useState('');
-  const [modelTier, setModelTier] = useState<'flash' | 'pro'>('flash');
-  const [customEndpoint, setCustomEndpoint] = useState(false);
-  const [apiTest, setApiTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number; model?: string } | null>(null);
-  const [apiBusy, setApiBusy] = useState(false);
-  const [apiError, setApiError] = useState('');
   const [petOffset, setPetOffset] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || 'null');
@@ -513,48 +498,8 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     void ingestFile(file);
   }, [ingestFile, pushNotice]);
 
-  const openApiConfig = useCallback(async () => {
-    setApiOpen(true); setApiError(''); setApiTest(null);
-    try {
-      const cfg = await api.modelConfiguration();
-      setApiCfg(cfg);
-      setApiBaseUrl(cfg.baseUrl ?? '');
-      setApiModelFast(cfg.modelSlots?.fast ?? '');
-      setApiModelReasoning(cfg.modelSlots?.reasoning ?? cfg.modelSlots?.fast ?? '');
-      setApiHosts((cfg.allowedHosts ?? []).join(','));
-      setModelTier(cfg.modelSlots?.fast && cfg.modelSlots?.fast === cfg.modelSlots?.reasoning ? 'pro' : 'flash');
-      setApiKeyDraft('');
-    } catch (error) { setApiError(String(error)); }
-  }, []);
 
-  const saveApiConfig = useCallback(async () => {
-    setApiBusy(true); setApiError('');
-    try {
-      const flash = apiModelFast.trim();
-      const pro = (apiModelReasoning || apiModelFast).trim();
-      const chosen = modelTier === 'pro' ? pro : flash;
-      const payload: Record<string, string> = {
-        ENABLE: apiCfg?.enabled ? '1' : '0',
-        BASE_URL: apiBaseUrl.trim(),
-        MODEL_FAST: chosen,
-        MODEL_REASONING: chosen,
-        ALLOWED_HOSTS: apiHosts.trim(),
-      };
-      if (apiKeyDraft.trim()) payload.API_KEY = apiKeyDraft.trim();
-      const saved = await api.saveModelConfiguration(payload);
-      setApiCfg(saved as unknown as ModelConfig);
-      setApiKeyDraft('');
-      pushNotice('alert', '模型接入已保存', '配置立即生效，无需重启服务');
-    } catch (error) { setApiError(String(error)); }
-    finally { setApiBusy(false); }
-  }, [apiCfg, apiBaseUrl, apiModelFast, apiModelReasoning, apiHosts, apiKeyDraft, modelTier, pushNotice]);
 
-  const testApiConfig = useCallback(async () => {
-    setApiBusy(true); setApiError(''); setApiTest(null);
-    try { setApiTest(await api.testModelConnection()); }
-    catch (error) { setApiTest({ ok: false, reason: String(error) }); }
-    finally { setApiBusy(false); }
-  }, []);
 
   useEffect(() => {
     try { localStorage.setItem('pitguard-upload-section', section); } catch { /* 忽略隐私模式 */ }
@@ -611,107 +556,13 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     >
       {open ? (
         <aside className="agentDock" style={{ height: dockHeight }} aria-label="智能设计助手">
-          {apiOpen ? (
-            <div className="agentDockSettings">
-              <header className="agentDockSettingsHead">
-                <button type="button" className="agentDockBack" onClick={() => setApiOpen(false)}>← 返回</button>
-                <strong>设置</strong>
-              </header>
-              <div className="agentDockSettingsBody">
-                <div className="agentApiSectionTitle">上传</div>
-                <label>剖面
-                  <select value={section} onChange={(event) => setSection(event.target.value)}>
-                    <option value="">自动（优先 2-2）</option>
-                    <option value="1-1">1-1</option>
-                    <option value="1'-1'">1'-1'</option>
-                    <option value="2-2">2-2</option>
-                    <option value="3-3">3-3</option>
-                    <option value="3'-3'">3'-3'</option>
-                    <option value="4-4">4-4</option>
-                    <option value="4'-4'">4'-4'</option>
-                    <option value="5-5">5-5</option>
-                    <option value="5'-5'">5'-5'</option>
-                    <option value="出土口">出土口</option>
-                  </select>
-                </label>
-                <label className="agentApiToggle">
-                  <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />
-                  批量：全书每个剖面各算一遍（只算不出包，约 40 分钟）
-                </label>
-                <label className="agentApiToggle">
-                  <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
-                  P3：出包后继续跑预埋件与套筒深化（耗时长）
-                </label>
-                <div className="agentApiSectionTitle">模型接入</div>
-                <p className="agentApiHint">{apiCfg?.configured ? `已配置 ${apiCfg.keyHint ?? ''}` : '尚未配置 Key'}{apiCfg?.source ? ` · 来源 ${apiCfg.source}` : ''}</p>
-                <label className="agentApiToggle">
-                  <input type="checkbox" checked={Boolean(apiCfg?.enabled)}
-                    onChange={(event) => setApiCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
-                  启用（仅参数理解、路由、扫描件；不参与数值判定）
-                </label>
-                <div className="agentEndpointRow">
-                  <span>接口</span>
-                  <div>
-                    <strong>{apiBaseUrl.replace(/^https?:\/\//, '').split('/')[0] || '未配置'}</strong>
-                    <button type="button" className="agentLinkBtn" onClick={() => setCustomEndpoint((prev) => !prev)}>
-                      {customEndpoint ? '收起' : '自定义'}
-                    </button>
-                  </div>
-                </div>
-                {customEndpoint ? (
-                  <label>接口地址（Base URL）
-                    <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
-                    <small className="agentFieldHint">换服务商时才需要改；域名会自动加入白名单</small>
-                  </label>
-                ) : null}
-                <div className="agentDockTier">
-                  <span>模型</span>
-                  <div className="agentTierCards">
-                    <label className={modelTier === 'flash' ? 'on' : ''}>
-                      <input type="radio" name="modelTier" checked={modelTier === 'flash'}
-                        onChange={() => setModelTier('flash')} />
-                      <b>Flash</b>
-                      <small>快 · 省</small>
-                    </label>
-                    <label className={modelTier === 'pro' ? 'on' : ''}>
-                      <input type="radio" name="modelTier" checked={modelTier === 'pro'}
-                        onChange={() => setModelTier('pro')} />
-                      <b>Pro</b>
-                      <small>更强 · 更慢</small>
-                    </label>
-                  </div>
-                </div>
-                <p className="agentApiHint">
-                  {modelTier === 'pro' && (!apiModelReasoning || apiModelReasoning === apiModelFast)
-                    ? 'Pro 未单独配置，当前与 Flash 相同'
-                    : (modelTier === 'pro' ? apiModelReasoning : apiModelFast)}
-                </p>
-                <label>API Key
-                  <input type="password" value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)}
-                    placeholder={apiCfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
-                </label>
-                {apiError ? <p className="agentApiError">{apiError}</p> : null}
-                {apiTest ? (
-                  <p className={apiTest.ok ? 'agentApiOk' : 'agentApiError'}>
-                    {apiTest.ok ? `连通正常 · ${apiTest.latencyMs ?? '-'} ms` : `失败：${apiTest.reason ?? ''}`}
-                  </p>
-                ) : null}
-              </div>
-              <footer className="agentDockSettingsFoot">
-                <button type="button" onClick={() => void saveApiConfig()} disabled={apiBusy}>{apiBusy ? '处理中…' : '保存'}</button>
-                <button type="button" className="secondary" onClick={() => void testApiConfig()} disabled={apiBusy}>测试连接</button>
-              </footer>
-            </div>
-          ) : (<>
+
           <header className="agentDockHeader">
             <div>
               <strong>智能设计助手</strong>
               <span>{projectName || '当前项目'}</span>
             </div>
-            <div className="agentDockHeaderActions">
-              <button type="button" className="agentDockGear" title="设置" onClick={() => void openApiConfig()}>⚙</button>
-              <button type="button" className="secondary" onClick={() => setOpen(false)}>收起</button>
-            </div>
+            <button type="button" className="secondary" onClick={() => setOpen(false)}>收起</button>
           </header>
 
           <div className={`agentDockGap ${gap.tone}`} role="status" title={gap.text}>
@@ -738,6 +589,28 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           </div>
 
           <footer className="agentDockCompose">
+            <div className="agentDockTools">
+              <select className="agentDockSection" value={section} onChange={(event) => setSection(event.target.value)}
+                title="计算书里的剖面；留空按 2-2 自动选">
+                <option value="">剖面：自动</option>
+                <option value="1-1">1-1</option>
+                <option value="1'-1'">1'-1'</option>
+                <option value="2-2">2-2</option>
+                <option value="3-3">3-3</option>
+                <option value="3'-3'">3'-3'</option>
+                <option value="4-4">4-4</option>
+                <option value="4'-4'">4'-4'</option>
+                <option value="5-5">5-5</option>
+                <option value="5'-5'">5'-5'</option>
+                <option value="出土口">出土口</option>
+              </select>
+              <label className="agentDockP3" title="整本书每个剖面各算一遍">
+                <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />批量
+              </label>
+              <label className="agentDockP3" title="出包后继续跑 P3 深化">
+                <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />P3
+              </label>
+            </div>
             <div className="agentDockComposeInput">
               <textarea
                 className="agentDockInput"
@@ -759,7 +632,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           </footer>
 
           {error ? <p className="agentDockError" role="alert">{error}</p> : null}
-          </>)}
+
         </aside>
       ) : (
         notices.length ? <div className="agentDockToasts">{renderNotices()}</div> : null
