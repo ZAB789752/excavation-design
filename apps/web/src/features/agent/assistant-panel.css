@@ -467,3 +467,13 @@
   border: 1px solid #1d4ed8; background: #1d4ed8; color: #fff; cursor: pointer;
 }
 .agentDockSettingsFoot button.secondary { background: #fff; color: #1f3a5f; border-color: #dbe3ec; }
+
+.agentDockTier { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; color: #34495e; }
+.agentDockTier > div { display: flex; gap: 8px; }
+.agentDockTier label {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
+  height: 30px; border: 1px solid #dbe3ec; border-radius: 7px; background: #fff;
+  font-size: 12px; cursor: pointer;
+}
+.agentDockTier label.on { border-color: #1d4ed8; background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+.agentDockTier label input { accent-color: #1d4ed8; }

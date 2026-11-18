@@ -99,6 +99,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [apiModelReasoning, setApiModelReasoning] = useState('');
   const [apiHosts, setApiHosts] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [modelTier, setModelTier] = useState<'flash' | 'pro'>('flash');
   const [apiTest, setApiTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number; model?: string } | null>(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState('');
@@ -523,8 +524,9 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       setApiCfg(cfg);
       setApiBaseUrl(cfg.baseUrl ?? '');
       setApiModelFast(cfg.modelSlots?.fast ?? '');
-      setApiModelReasoning(cfg.modelSlots?.reasoning ?? '');
+      setApiModelReasoning(cfg.modelSlots?.reasoning ?? cfg.modelSlots?.fast ?? '');
       setApiHosts((cfg.allowedHosts ?? []).join(','));
+      setModelTier(cfg.modelSlots?.fast && cfg.modelSlots?.fast === cfg.modelSlots?.reasoning ? 'pro' : 'flash');
       setApiKeyDraft('');
       setCallLog(await api.modelCallLog(6).catch(() => null));
     } catch (error) { setApiError(String(error)); }
@@ -533,11 +535,14 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const saveApiConfig = useCallback(async () => {
     setApiBusy(true); setApiError('');
     try {
+      const flash = apiModelFast.trim();
+      const pro = (apiModelReasoning || apiModelFast).trim();
+      const chosen = modelTier === 'pro' ? pro : flash;
       const payload: Record<string, string> = {
         ENABLE: apiCfg?.enabled ? '1' : '0',
         BASE_URL: apiBaseUrl.trim(),
-        MODEL_FAST: apiModelFast.trim(),
-        MODEL_REASONING: apiModelReasoning.trim(),
+        MODEL_FAST: chosen,
+        MODEL_REASONING: chosen,
         ALLOWED_HOSTS: apiHosts.trim(),
       };
       if (apiKeyDraft.trim()) payload.API_KEY = apiKeyDraft.trim();
@@ -547,7 +552,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       pushNotice('alert', '模型接入已保存', '配置立即生效，无需重启服务');
     } catch (error) { setApiError(String(error)); }
     finally { setApiBusy(false); }
-  }, [apiCfg, apiBaseUrl, apiModelFast, apiModelReasoning, apiHosts, apiKeyDraft, pushNotice]);
+  }, [apiCfg, apiBaseUrl, apiModelFast, apiModelReasoning, apiHosts, apiKeyDraft, modelTier, pushNotice]);
 
   const testApiConfig = useCallback(async () => {
     setApiBusy(true); setApiError(''); setApiTest(null);
@@ -655,18 +660,25 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
                 <label>服务地址
                   <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
                 </label>
-                <label>模型 fast
-                  <input value={apiModelFast} onChange={(event) => setApiModelFast(event.target.value)} />
-                </label>
-                <label>模型 reasoning
-                  <input value={apiModelReasoning} onChange={(event) => setApiModelReasoning(event.target.value)} />
-                </label>
+                <div className="agentDockTier">
+                  <span>模型</span>
+                  <div>
+                    <label className={modelTier === 'flash' ? 'on' : ''}>
+                      <input type="radio" name="modelTier" checked={modelTier === 'flash'}
+                        onChange={() => setModelTier('flash')} />
+                      Flash
+                    </label>
+                    <label className={modelTier === 'pro' ? 'on' : ''}>
+                      <input type="radio" name="modelTier" checked={modelTier === 'pro'}
+                        onChange={() => setModelTier('pro')} />
+                      Pro
+                    </label>
+                  </div>
+                </div>
+                <p className="agentApiHint">{modelTier === 'pro' ? (apiModelReasoning || apiModelFast) : apiModelFast}</p>
                 <label>API Key
                   <input type="password" value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)}
                     placeholder={apiCfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
-                </label>
-                <label>允许域名
-                  <input value={apiHosts} onChange={(event) => setApiHosts(event.target.value)} />
                 </label>
                 <div className="agentApiSectionTitle">调用记录</div>
                 <p className="agentApiHint">
