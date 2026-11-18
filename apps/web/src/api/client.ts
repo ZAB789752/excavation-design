@@ -528,6 +528,15 @@ export const api = {
       method: 'POST', body: form, timeoutMs: 180000, responseIdleTimeoutMs: 180000,
       activity: { label: '计算书自动生成' } });
   },
+  startCalculationBookBatch: (file: File, sections?: string) => {
+    const form = new FormData();
+    if (sections) form.append('sections', sections);
+    form.append('file', file);
+    return request<{ taskId: string; projectId: string; sections: string[] | string }>(
+      '/api/agents/calculation-book/batch', {
+        method: 'POST', body: form, timeoutMs: 180000, responseIdleTimeoutMs: 180000,
+        activity: { label: '多剖面批量计算' } });
+  },
   taskStatus: (taskId: string) => request<{
     id: string; status: string; progress: number; currentStep?: string; error?: string | null;
   }>(`/api/tasks/${taskId}`, { method: 'GET' }),

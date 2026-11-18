@@ -81,6 +81,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [dropActive, setDropActive] = useState(false);
   const [section, setSection] = useState('');
   const [runP3, setRunP3] = useState(false);
+  const [batchAll, setBatchAll] = useState(false);
   const [petOffset, setPetOffset] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || 'null');
@@ -403,6 +404,21 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const ingestFile = useCallback(async (file: File) => {
     setAttachBusy(true); setError(''); setAttachStage('正在读取文件…');
     try {
+      if (file.name.toLowerCase().endsWith('.pdf') && batchAll) {
+        const started = await api.startCalculationBookBatch(file);
+        setAttachStage('已提交，正在逐个剖面建模计算…');
+        let status = await api.taskStatus(started.taskId);
+        for (let i = 0; i < 600 && !['success', 'failed', 'cancelled'].includes(status.status); i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          status = await api.taskStatus(started.taskId);
+          setAttachStage(status.currentStep || '正在逐个剖面计算…');
+        }
+        if (status.status !== 'success') throw new Error(status.error || `批量未完成：${status.status}`);
+        await refreshGap();
+        onProjectChanged?.();
+        pushNotice('alert', '多剖面批量完成', '每个剖面各建一个项目，汇总表已写入 exports/book-sections-summary-*.csv');
+        return;
+      }
       if (file.name.toLowerCase().endsWith('.pdf')) {
         const started = await api.startCalculationBookAutopilot(projectId, file, section || undefined, runP3);
         setAttachStage('已提交，正在解析计算书…');
@@ -451,7 +467,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       setError(text);
       pushNotice('error', '文件录入失败', text);
     } finally { setAttachBusy(false); setAttachStage(''); }
-  }, [projectId, activeId, reloadMessages, refreshGap, reportRouter, pushNotice, onProjectChanged, section, runP3]);
+  }, [projectId, activeId, reloadMessages, refreshGap, reportRouter, pushNotice, onProjectChanged, section, runP3, batchAll]);
 
   const handleFileDragOver = useCallback((event: React.DragEvent) => {
     if (!Array.from(event.dataTransfer.types).includes('Files')) return;
@@ -574,6 +590,10 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
               <option value="5'-5'">5'-5'</option>
               <option value="出土口">出土口</option>
             </select>
+            <label className="agentDockP3" title="整本书的每个剖面各算一遍，出一张对照表">
+              <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />
+              批量
+            </label>
             <label className="agentDockP3" title="出包后继续跑 1203 项预埋件与套筒深化">
               <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
               P3
