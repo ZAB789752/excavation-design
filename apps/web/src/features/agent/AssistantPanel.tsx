@@ -577,7 +577,9 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const roomLeft = ballLeft - 8;
   const panelWidth = Math.min(356, viewport.w - 40);
   const horizontal = roomRight >= panelWidth || roomRight >= roomLeft ? 'fromLeft' : 'fromRight';
-  const dockHeight = Math.max(240, Math.min(500, vertical === 'above' ? roomAbove : roomBelow));
+  const roomHeight = Math.max(240, Math.min(500, vertical === 'above' ? roomAbove : roomBelow));
+  // 没有消息时不撑满一屏，否则会被误认成输入框
+  const dockHeight = messages.length ? roomHeight : Math.min(roomHeight, 206);
   const placement = `place-${vertical}-${horizontal}`;
 
   return (
@@ -603,12 +605,15 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
             {gap.text}
           </div>
 
+          {messages.length === 0 ? (
+            <div className="agentDockEmpty">
+              <strong>把计算书拖进来</strong>
+              <span>PDF 跑全流程；Excel / Word / CSV / 图片补参数</span>
+              <span className="agentDockEmptyExample">例：施工荷载 30kPa，安全等级三级</span>
+            </div>
+          ) : (
           <div className="agentDockMessages" ref={threadRef}>
-            {messages.length === 0 ? (
-              <p className="agentDockEmpty">
-                贴一段参数（如「施工荷载 30kPa，基坑安全等级三级」），或把文件直接拖到桌宠上：PDF 走全流程自动生成；Excel / Word / CSV / 图片 用来补参数。
-              </p>
-            ) : messages.map((message) => (
+            {messages.map((message) => (
               message.role === 'tool' ? (
                 <article key={message.id} className="agentMessage tool">
                   <small>任务 · {new Date(message.createdAt).toLocaleTimeString()}</small>
@@ -625,8 +630,10 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
               )
             ))}
           </div>
+          )}
 
-          <footer className="agentDockCompose agentDockComposeSlim">
+          <footer className="agentDockCompose">
+            <div className="agentDockTools">
             <select
               className="agentDockSection"
               value={section}
@@ -676,20 +683,23 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
                 event.target.value = '';
               }}
             />
-            <input
-              className="agentDockInput"
-              type="text"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') { event.preventDefault(); void send(); }
-              }}
-              placeholder={attachBusy ? (attachStage || '正在读取文件…') : '描述问题 / 贴参数，或上传 PDF'}
-              aria-label="向智能设计助手提问"
-            />
-            <button type="button" onClick={() => void send()} disabled={busy || attachBusy || !draft.trim()}>
-              {busy ? '发送中' : '发送'}
-            </button>
+            </div>
+            <div className="agentDockComposeInput">
+              <textarea
+                className="agentDockInput"
+                rows={2}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
+                }}
+                placeholder={attachBusy ? (attachStage || '正在读取文件…') : '说一句就能改参数，例如：施工荷载改成 35kPa'}
+                aria-label="向智能设计助手提问"
+              />
+              <button type="button" className="agentDockSend" onClick={() => void send()} disabled={busy || attachBusy || !draft.trim()}>
+                {busy ? '发送中' : '发送'}
+              </button>
+            </div>
           </footer>
 
           {error ? <p className="agentDockError" role="alert">{error}</p> : null}
