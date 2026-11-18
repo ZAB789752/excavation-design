@@ -827,3 +827,16 @@ def parse_extraction_json(payload: str) -> list[dict]:
             mapped.append({'key': key, 'value': row.get('value'),
                            'raw': row.get('raw') or '', 'page': row.get('page')})
     return mapped
+
+def mark_manual_applied(project: Any, incoming: dict | None) -> None:
+    """页面里手填（哪怕填的就是默认值）也算“已由资料确认”，避免一直提示缺失。"""
+    if not isinstance(incoming, dict) or not incoming:
+        return
+    advanced = dict(project.advanced_engineering or {})
+    intake = dict(advanced.get("designBasisIntake") or {})
+    applied = set(intake.get("appliedKeys") or [])
+    applied.update(str(key) for key, value in incoming.items() if value is not None)
+    intake["appliedKeys"] = sorted(applied)
+    intake["source"] = intake.get("source") or "manual"
+    advanced["designBasisIntake"] = intake
+    project.advanced_engineering = advanced

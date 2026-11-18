@@ -140,6 +140,9 @@ def _build_updated_project(
             changed_design_keys.append(key)
         data[key] = value
     updated = Project.model_validate(data)
+    from app.agents.design_basis_intake import mark_manual_applied
+
+    mark_manual_applied(updated, payload.get("designSettings") if isinstance(payload, dict) else None)
     from app.services.engineering_templates import enforce_safety_target_floors
 
     enforcement = enforce_safety_target_floors(updated, actor=actor)
