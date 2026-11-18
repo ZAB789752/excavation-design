@@ -31,3 +31,16 @@ def test_empty_payload_changes_nothing() -> None:
     mark_manual_applied(project, {})
     mark_manual_applied(project, None)
     assert not (project.advanced_engineering or {}).get("designBasisIntake")
+
+
+def test_default_values_are_amber_not_red() -> None:
+    project = Project(name="默认值分类")
+    summary = missing_summary(project)
+    defaults = {item["key"] for item in summary["defaults"]}
+    missing = {item["key"] for item in summary["missing"]}
+    # 模板自带值 → 黄
+    assert "defaultRebarGrade" in defaults
+    assert "defaultCoverMm" in defaults
+    # 没有默认值又没填 → 红
+    assert "bearingCapacityKpa" in missing
+    assert "defaultRebarGrade" not in missing

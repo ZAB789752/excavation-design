@@ -503,32 +503,45 @@ REQUIRED: tuple[dict[str, Any], ...] = (
 
 
 def missing_summary(project: Any) -> dict:
+    """缺项分两类：真没填（红）、填了但沿用默认值（黄）。"""
     settings = project.design_settings.model_dump(mode='json', by_alias=True)
     advanced = dict(project.advanced_engineering or {})
     applied = set((advanced.get('designBasisIntake') or {}).get('appliedKeys') or [])
-    items = []
+    missing: list[dict] = []
+    defaults: list[dict] = []
     for row in REQUIRED:
         key = row['key']
-        value = settings.get(key)
         if key in applied:
             continue
+        value = settings.get(key)
+        default = row.get('default')
         if key == 'designBasisConfirmed':
-            present = value is True
-        elif value is None or value == '' or value is False:
-            present = False
-        else:
-            present = value != row['default']
-        if not present:
-            items.append({'key': key, 'label': row['label'],
-                          'reason': row.get('note') or '仍为模板默认值，未由资料确认'})
-    labels = [item['label'] for item in items[:2]]
-    text = '设计基准已齐，可以确认' if not items else (
-        '还缺：' + '、'.join(labels) + (f' 等 {len(items)} 项' if len(items) > len(labels) else ''))
+            if value is True:
+                continue
+            missing.append({'key': key, 'label': row['label'], 'state': 'missing',
+                            'reason': row.get('note') or '尚未确认'})
+            continue
+        empty = value is None or value == '' or value is False
+        if empty:
+            missing.append({'key': key, 'label': row['label'], 'state': 'missing',
+                            'reason': row.get('note') or '未填写'})
+        elif default is not None and value == default:
+            defaults.append({'key': key, 'label': row['label'], 'state': 'default',
+                             'reason': f'未填写，按默认值 {default}'})
+    parts = []
+    if missing:
+        parts.append('缺：' + '、'.join(item['label'] for item in missing[:3])
+                     + (f' 等 {len(missing)} 项' if len(missing) > 3 else ''))
+    if defaults:
+        parts.append('默认值：' + '、'.join(item['label'] for item in defaults[:3])
+                     + (f' 等 {len(defaults)} 项' if len(defaults) > 3 else ''))
+    text = '；'.join(parts) if parts else '设计基准已齐，可以确认'
     return {
-        'count': len(items), 'items': items, 'text': text,
+        'count': len(missing), 'defaultCount': len(defaults),
+        'items': missing + defaults, 'missing': missing, 'defaults': defaults,
+        'text': text,
         'confirmed': bool(settings.get('designBasisConfirmed')),
     }
-
 
 def _repository(actor: str):
     import os

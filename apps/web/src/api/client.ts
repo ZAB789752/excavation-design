@@ -587,7 +587,10 @@ export const api = {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input), timeoutMs: 90000, responseIdleTimeoutMs: 90000,
     activity: { label: '总控正在分派任务' } }),
-  designBasisMissing: (projectId: string) => request<DesignBasisGap>(
+  designBasisMissing: (projectId: string) => request<DesignBasisGap & {
+    defaultCount?: number; missing?: Array<{ key: string; label: string }>;
+    defaults?: Array<{ key: string; label: string }>;
+  }>(
     `/api/agents/design-basis/missing?project_id=${encodeURIComponent(projectId)}`, {
       timeoutMs: 30000, activity: { quiet: true, cacheTtlMs: 0 } }),
   ingestDesignBasis: (

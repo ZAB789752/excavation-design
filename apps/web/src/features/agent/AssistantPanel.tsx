@@ -16,7 +16,7 @@ type Props = {
 };
 
 type Notice = { id: number; kind: 'alert' | 'error'; title: string; text: string };
-type Gap = { text: string; items: string[]; tone: 'ok' | 'warn' | 'error' };
+type Gap = { text: string; items: string[]; missing?: string[]; defaults?: string[]; tone: 'ok' | 'warn' | 'error' };
 
 const POLL_INTERVAL_MS = 15000;
 const NOTICE_LIFETIME_MS = 12000;
@@ -255,8 +255,15 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const refreshGap = useCallback(async () => {
     try {
       const basis = await api.designBasisMissing(projectId);
-      if (basis.count > 0) {
-        setGap({ text: basis.text, items: basis.items.map((item) => item.label), tone: 'warn' });
+      if (basis.count > 0 || (basis.defaultCount ?? 0) > 0) {
+        const missing = (basis.missing ?? []).map((item) => item.label);
+        const defaults = (basis.defaults ?? []).map((item) => item.label);
+        setGap({
+          text: basis.text,
+          items: basis.items.map((item) => item.label),
+          missing, defaults,
+          tone: missing.length ? 'error' : 'warn',
+        });
         return;
       }
       const plan = await api.agentPlan(projectId);
@@ -539,7 +546,9 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           </header>
 
           <div className={`agentDockGap ${gap.tone}`} role="status" title={gap.text}>
-            {gap.text}
+            {gap.missing?.length ? <span className="gapMissing">缺：{gap.missing.join('、')}</span> : null}
+            {gap.defaults?.length ? <span className="gapDefault">默认：{gap.defaults.join('、')}</span> : null}
+            {!gap.missing?.length && !gap.defaults?.length ? gap.text : null}
           </div>
 
           <div className={`agentDockBody ${messages.length ? 'hasMessages' : ''}`} ref={threadRef}>
