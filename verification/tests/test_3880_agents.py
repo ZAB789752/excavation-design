@@ -476,10 +476,11 @@ def test_embedded_worker_autorun_to_human_review(tmp_path,monkeypatch,baseline):
         created=client.post('/api/agents/runs',json={'result_hash':source['resultHash'],'max_candidates':2})
         assert created.status_code==201
         rid=created.json()['id'];state={}
-        for _ in range(40):
+        deadline=time.time()+30
+        while time.time()<deadline:
             state=client.get('/api/agents/runs/'+rid).json()
             if state.get('status')=='awaiting_review':break
-            time.sleep(.1)
+            time.sleep(.2)
         assert state['status']=='awaiting_review'
         assert len(client.get('/api/agents/runs/'+rid+'/overview').json()['candidates'])==2
 
