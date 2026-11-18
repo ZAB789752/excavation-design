@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { api } from '../api/client';
 import '../features/agent/assistant-panel.css';
 import './book-drop-pet.css';
@@ -10,6 +10,35 @@ export default function BookDropPet({ onImported }: { onImported: () => void }) 
   const [stage, setStage] = useState('');
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
+  const [offset, setOffset] = useState<{ x: number; y: number }>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('pitguard-agent-pet-pos-v2') || 'null');
+      if (saved && Number.isFinite(saved.x) && Number.isFinite(saved.y)) return { x: saved.x, y: saved.y };
+    } catch { /* 忽略 */ }
+    return { x: 0, y: 0 };
+  });
+  const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+
+  const onPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { startX: event.clientX, startY: event.clientY, baseX: offset.x, baseY: offset.y, moved: false };
+  };
+  const onPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    const next = { x: drag.baseX + dx, y: drag.baseY + dy };
+    setOffset(next);
+    try { localStorage.setItem('pitguard-agent-pet-pos-v2', JSON.stringify(next)); } catch { /* 忽略 */ }
+  };
+  const onPointerUp = () => {
+    if (dragRef.current?.moved) suppressClick.current = true;
+    dragRef.current = null;
+  };
 
   const ingest = useCallback(async (file: File) => {
     setBusy(true); setError(''); setDone(''); setOpen(true);
@@ -42,6 +71,7 @@ export default function BookDropPet({ onImported }: { onImported: () => void }) 
   return (
     <div
       className={`bookPet ${hover ? 'isOver' : ''}`}
+      style={{ transform: `translate(${offset.x}px, ${offset.y}px)` }}
       onDragOver={(event) => {
         if (!Array.from(event.dataTransfer.types).includes('Files')) return;
         event.preventDefault(); setHover(true); setOpen(true);
@@ -74,9 +104,20 @@ export default function BookDropPet({ onImported }: { onImported: () => void }) 
       <button
         type="button"
         className="bookPetBall"
-        onClick={() => setOpen((prev) => !prev)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onDragStart={(event) => event.preventDefault()}
+        onDoubleClick={() => {
+          setOffset({ x: 0, y: 0 });
+          try { localStorage.removeItem('pitguard-agent-pet-pos-v2'); } catch { /* 忽略 */ }
+        }}
+        onClick={() => {
+          if (suppressClick.current) { suppressClick.current = false; return; }
+          setOpen((prev) => !prev);
+        }}
         aria-label="拖入计算书"
-        title="拖入计算书：自动识别剖面并生成项目"
+        title="拖入计算书 · 可拖动，双击回原位"
       >
         {busy ? <span className="bookPetSpin" /> : <img src="/assistant-logo.jpg" alt="" draggable={false} />}
       </button>

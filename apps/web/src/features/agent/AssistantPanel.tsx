@@ -511,6 +511,12 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     try { localStorage.setItem('pitguard-upload-p3', runP3 ? '1' : '0'); } catch { /* 同上 */ }
   }, [runP3]);
 
+  // 进入/切换项目时展开一次，让助手的上下文跟着当前项目走
+  useEffect(() => {
+    if (!projectId) return;
+    setOpen(true);
+  }, [projectId]);
+
   const failCount = status?.failCount ?? 0;
   const badge = status?.statusUnavailable || notices.some((n) => n.kind === 'error')
     ? '!'
