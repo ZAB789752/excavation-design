@@ -2909,3 +2909,5 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 @media (max-width: 640px) {
   .globalRequestOverlay.passive { inset: 64px 10px auto 10px; width: auto; }
 }
+
+.panelTitleActions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
