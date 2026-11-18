@@ -103,11 +103,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [apiTest, setApiTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number; model?: string } | null>(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState('');
-  const [callLog, setCallLog] = useState<{
-    calls: Array<{ id: number; createdAt: string; purpose: string; model: string; ok: boolean;
-      promptTokens: number | null; completionTokens: number | null; durationMs: number }>;
-    totals: { calls: number; promptTokens: number; completionTokens: number };
-  } | null>(null);
   const [petOffset, setPetOffset] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || 'null');
@@ -528,7 +523,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       setApiHosts((cfg.allowedHosts ?? []).join(','));
       setModelTier(cfg.modelSlots?.fast && cfg.modelSlots?.fast === cfg.modelSlots?.reasoning ? 'pro' : 'flash');
       setApiKeyDraft('');
-      setCallLog(await api.modelCallLog(6).catch(() => null));
     } catch (error) { setApiError(String(error)); }
   }, []);
 
@@ -558,10 +552,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     setApiBusy(true); setApiError(''); setApiTest(null);
     try { setApiTest(await api.testModelConnection()); }
     catch (error) { setApiTest({ ok: false, reason: String(error) }); }
-    finally {
-      setApiBusy(false);
-      setCallLog(await api.modelCallLog(6).catch(() => null));
-    }
+    finally { setApiBusy(false); }
   }, []);
 
   useEffect(() => {
@@ -657,21 +648,24 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
                     onChange={(event) => setApiCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
                   启用（仅参数理解、路由、扫描件；不参与数值判定）
                 </label>
-                <label>服务地址
+                <label>接口地址（Base URL）
                   <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
+                  <small className="agentFieldHint">模型服务的 /v1 根地址，换供应商才需要改</small>
                 </label>
                 <div className="agentDockTier">
                   <span>模型</span>
-                  <div>
+                  <div className="agentTierCards">
                     <label className={modelTier === 'flash' ? 'on' : ''}>
                       <input type="radio" name="modelTier" checked={modelTier === 'flash'}
                         onChange={() => setModelTier('flash')} />
-                      Flash
+                      <b>Flash</b>
+                      <small>快 · 省</small>
                     </label>
                     <label className={modelTier === 'pro' ? 'on' : ''}>
                       <input type="radio" name="modelTier" checked={modelTier === 'pro'}
                         onChange={() => setModelTier('pro')} />
-                      Pro
+                      <b>Pro</b>
+                      <small>更强 · 更慢</small>
                     </label>
                   </div>
                 </div>
@@ -684,21 +678,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
                   <input type="password" value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)}
                     placeholder={apiCfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
                 </label>
-                <div className="agentApiSectionTitle">调用记录</div>
-                <p className="agentApiHint">
-                  {callLog ? `共 ${callLog.totals.calls} 次 · 输入 ${callLog.totals.promptTokens} / 输出 ${callLog.totals.completionTokens}` : '正在读取…'}
-                </p>
-                {callLog?.calls?.length ? (
-                  <ul className="agentApiCalls">
-                    {callLog.calls.slice(0, 3).map((call) => (
-                      <li key={call.id} className={call.ok ? '' : 'failed'}>
-                        <span>{String(call.createdAt).slice(5, 16).replace('T', ' ')}</span>
-                        <em>{call.purpose}</em>
-                        <b>{call.promptTokens ?? '-'} / {call.completionTokens ?? '-'}</b>
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
                 {apiError ? <p className="agentApiError">{apiError}</p> : null}
                 {apiTest ? (
                   <p className={apiTest.ok ? 'agentApiOk' : 'agentApiError'}>
