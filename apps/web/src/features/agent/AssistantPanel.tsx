@@ -83,9 +83,15 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [attachBusy, setAttachBusy] = useState(false);
   const [attachStage, setAttachStage] = useState('');
   const [dropActive, setDropActive] = useState(false);
-  const [section, setSection] = useState('');
-  const [runP3, setRunP3] = useState(false);
-  const [batchAll, setBatchAll] = useState(false);
+  const [section, setSection] = useState(() => {
+    try { return localStorage.getItem('pitguard-upload-section') || ''; } catch { return ''; }
+  });
+  const [runP3, setRunP3] = useState(() => {
+    try { return localStorage.getItem('pitguard-upload-p3') === '1'; } catch { return false; }
+  });
+  const [batchAll, setBatchAll] = useState(() => {
+    try { return localStorage.getItem('pitguard-upload-batch') === '1'; } catch { return false; }
+  });
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [apiOpen, setApiOpen] = useState(false);
   const [apiCfg, setApiCfg] = useState<ModelConfig | null>(null);
@@ -545,6 +551,16 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     finally { setApiBusy(false); }
   }, []);
 
+  useEffect(() => {
+    try { localStorage.setItem('pitguard-upload-section', section); } catch { /* 忽略隐私模式 */ }
+  }, [section]);
+  useEffect(() => {
+    try { localStorage.setItem('pitguard-upload-batch', batchAll ? '1' : '0'); } catch { /* 同上 */ }
+  }, [batchAll]);
+  useEffect(() => {
+    try { localStorage.setItem('pitguard-upload-p3', runP3 ? '1' : '0'); } catch { /* 同上 */ }
+  }, [runP3]);
+
   const failCount = status?.failCount ?? 0;
   const badge = status?.statusUnavailable || notices.some((n) => n.kind === 'error')
     ? '!'
@@ -625,34 +641,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           )}
 
           <footer className="agentDockCompose">
-            <div className="agentDockTools">
-            <select
-              className="agentDockSection"
-              value={section}
-              onChange={(event) => setSection(event.target.value)}
-              title="计算书里的剖面；留空按 2-2 自动选"
-            >
-              <option value="">剖面：自动(2-2)</option>
-              <option value="1-1">1-1</option>
-              <option value="1'-1'">1'-1'</option>
-              <option value="2-2">2-2</option>
-              <option value="3-3">3-3</option>
-              <option value="3'-3'">3'-3'</option>
-              <option value="4-4">4-4</option>
-              <option value="4'-4'">4'-4'</option>
-              <option value="5-5">5-5</option>
-              <option value="5'-5'">5'-5'</option>
-              <option value="出土口">出土口</option>
-            </select>
-            <label className="agentDockP3" title="整本书的每个剖面各算一遍，出一张对照表">
-              <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />
-              批量
-            </label>
-            <label className="agentDockP3" title="出包后继续跑 1203 项预埋件与套筒深化">
-              <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
-              P3
-            </label>
-            </div>
             <div className="agentDockComposeInput">
               <textarea
                 className="agentDockInput"
@@ -704,7 +692,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
 
       {menu ? (
         <div className="agentPetMenu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
-          <button type="button" onClick={() => void openApiConfig()}>API 接入设置</button>
+          <button type="button" onClick={() => void openApiConfig()}>设置</button>
           <button type="button" onClick={() => { setMenu(null); setOpen(true); }}>打开面板</button>
           <button type="button" onClick={() => { setMenu(null); resetPetPosition(); }}>回到原位</button>
         </div>
@@ -715,11 +703,37 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           <section className="agentApiCard" aria-label="模型接入设置">
             <header>
               <div>
-                <strong>模型接入</strong>
-                <span>{apiCfg?.configured ? `已配置 ${apiCfg.keyHint ?? ''}` : '尚未配置 Key'}{apiCfg?.source ? ` · 来源 ${apiCfg.source}` : ''}</span>
+                <strong>设置</strong>
+                <span>上传方式与模型接入；改完即时生效</span>
               </div>
               <button type="button" className="secondary" onClick={() => setApiOpen(false)}>关闭</button>
             </header>
+            <div className="agentApiSectionTitle">上传</div>
+            <label>剖面（仅单份 PDF 生效）
+              <select className="agentApiSelect" value={section} onChange={(event) => setSection(event.target.value)}>
+                <option value="">自动（优先 2-2）</option>
+                <option value="1-1">1-1</option>
+                <option value="1'-1'">1'-1'</option>
+                <option value="2-2">2-2</option>
+                <option value="3-3">3-3</option>
+                <option value="3'-3'">3'-3'</option>
+                <option value="4-4">4-4</option>
+                <option value="4'-4'">4'-4'</option>
+                <option value="5-5">5-5</option>
+                <option value="5'-5'">5'-5'</option>
+                <option value="出土口">出土口</option>
+              </select>
+            </label>
+            <label className="agentApiToggle">
+              <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />
+              批量：全书每个剖面各算一遍（只算不出包，约 40 分钟）
+            </label>
+            <label className="agentApiToggle">
+              <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
+              P3：出包后继续跑预埋件与套筒深化（耗时长，默认关）
+            </label>
+            <div className="agentApiSectionTitle">模型接入</div>
+            <p className="agentApiHint">{apiCfg?.configured ? `已配置 ${apiCfg.keyHint ?? ''}` : '尚未配置 Key'}{apiCfg?.source ? ` · 来源 ${apiCfg.source}` : ''}</p>
             <label className="agentApiToggle">
               <input type="checkbox" checked={Boolean(apiCfg?.enabled)}
                 onChange={(event) => setApiCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
