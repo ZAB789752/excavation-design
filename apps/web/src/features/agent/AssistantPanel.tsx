@@ -92,7 +92,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [batchAll, setBatchAll] = useState(() => {
     try { return localStorage.getItem('pitguard-upload-batch') === '1'; } catch { return false; }
   });
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [apiOpen, setApiOpen] = useState(false);
   const [apiCfg, setApiCfg] = useState<ModelConfig | null>(null);
   const [apiBaseUrl, setApiBaseUrl] = useState('');
@@ -518,7 +517,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   }, [ingestFile, pushNotice]);
 
   const openApiConfig = useCallback(async () => {
-    setMenu(null); setApiOpen(true); setApiError(''); setApiTest(null);
+    setApiOpen(true); setApiError(''); setApiTest(null);
     try {
       const cfg = await api.modelConfiguration();
       setApiCfg(cfg);
@@ -609,7 +608,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     <div
       className={`agentPet ${placement} ${dragging ? 'isDragging' : ''} ${dropActive ? 'isDropActive' : ''}`}
       style={{ transform: `translate(${petOffset.x}px, ${petOffset.y}px)` }}
-      onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }); }}
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
@@ -621,15 +619,17 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
               <strong>智能设计助手</strong>
               <span>{projectName || '当前项目'}</span>
             </div>
-            <button type="button" className="secondary" onClick={() => setOpen(false)}>收起</button>
+            <div className="agentDockHeaderActions">
+              <button type="button" className="agentDockGear" title="设置" onClick={() => void openApiConfig()}>⚙</button>
+              <button type="button" className="secondary" onClick={() => setOpen(false)}>收起</button>
+            </div>
           </header>
 
           <div className={`agentDockGap ${gap.tone}`} role="status" title={gap.text}>
             {gap.text}
           </div>
 
-          {messages.length === 0 ? null : (
-          <div className="agentDockMessages" ref={threadRef}>
+          <div className={`agentDockBody ${messages.length ? 'hasMessages' : ''}`} ref={threadRef}>
             {messages.map((message) => (
               message.role === 'tool' ? (
                 <article key={message.id} className="agentMessage tool">
@@ -647,7 +647,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
               )
             ))}
           </div>
-          )}
 
           <footer className="agentDockCompose">
             <div className="agentDockComposeInput">
@@ -699,13 +698,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
         {badge ? <span className="agentPetBadge">{badge}</span> : null}
       </div>
 
-      {menu ? (
-        <div className="agentPetMenu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
-          <button type="button" onClick={() => void openApiConfig()}>设置</button>
-          <button type="button" onClick={() => { setMenu(null); setOpen(true); }}>打开面板</button>
-          <button type="button" onClick={() => { setMenu(null); resetPetPosition(); }}>回到原位</button>
-        </div>
-      ) : null}
 
       {apiOpen ? (
         <div className="agentApiOverlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setApiOpen(false); }}>
