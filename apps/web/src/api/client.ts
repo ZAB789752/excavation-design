@@ -546,6 +546,11 @@ export const api = {
     '/api/agents/model/configuration', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload), activity: { label: '正在保存模型接入' } }),
+  modelCallLog: (limit = 10) => request<{
+    calls: Array<{ id: number; createdAt: string; purpose: string; model: string; ok: boolean;
+      promptTokens: number | null; completionTokens: number | null; durationMs: number }>;
+    totals: { calls: number; promptTokens: number; completionTokens: number };
+  }>(`/api/agents/model/calls?limit=${limit}`, { activity: { quiet: true, cacheTtlMs: 0 } }),
   testModelConnection: () => request<{
     ok: boolean; reason?: string; latencyMs?: number; model?: string; reply?: string;
   }>('/api/agents/model/test', { method: 'POST', timeoutMs: 40000, activity: { label: '正在测试模型连通' } }),

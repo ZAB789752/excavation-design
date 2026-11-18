@@ -103,6 +103,11 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [apiTest, setApiTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number; model?: string } | null>(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState('');
+  const [callLog, setCallLog] = useState<{
+    calls: Array<{ id: number; createdAt: string; purpose: string; model: string; ok: boolean;
+      promptTokens: number | null; completionTokens: number | null; durationMs: number }>;
+    totals: { calls: number; promptTokens: number; completionTokens: number };
+  } | null>(null);
   const [petOffset, setPetOffset] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || 'null');
@@ -522,6 +527,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       setApiModelReasoning(cfg.modelSlots?.reasoning ?? '');
       setApiHosts((cfg.allowedHosts ?? []).join(','));
       setApiKeyDraft('');
+      setCallLog(await api.modelCallLog(6).catch(() => null));
     } catch (error) { setApiError(String(error)); }
   }, []);
 
@@ -548,7 +554,10 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     setApiBusy(true); setApiError(''); setApiTest(null);
     try { setApiTest(await api.testModelConnection()); }
     catch (error) { setApiTest({ ok: false, reason: String(error) }); }
-    finally { setApiBusy(false); }
+    finally {
+      setApiBusy(false);
+      setCallLog(await api.modelCallLog(6).catch(() => null));
+    }
   }, []);
 
   useEffect(() => {
@@ -755,6 +764,21 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
             <label>允许域名（逗号分隔）
               <input value={apiHosts} onChange={(event) => setApiHosts(event.target.value)} placeholder="discovery-api.intern-ai.org.cn" />
             </label>
+            <div className="agentApiSectionTitle">调用记录</div>
+            <p className="agentApiHint">
+              {callLog ? `共 ${callLog.totals.calls} 次 · 输入 ${callLog.totals.promptTokens} / 输出 ${callLog.totals.completionTokens} tokens` : '正在读取…'}
+            </p>
+            {callLog?.calls?.length ? (
+              <ul className="agentApiCalls">
+                {callLog.calls.slice(0, 4).map((call) => (
+                  <li key={call.id} className={call.ok ? '' : 'failed'}>
+                    <span>{String(call.createdAt).slice(5, 16).replace('T', ' ')}</span>
+                    <em>{call.purpose}</em>
+                    <b>{call.promptTokens ?? '-'} / {call.completionTokens ?? '-'}</b>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
             {apiError ? <p className="agentApiError">{apiError}</p> : null}
             {apiTest ? (
               <p className={apiTest.ok ? 'agentApiOk' : 'agentApiError'}>

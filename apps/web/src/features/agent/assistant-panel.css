@@ -362,3 +362,13 @@
   background: #fff;
 }
 .agentApiHint { margin: 0; font-size: 11px; color: #6b7c93; }
+
+.agentApiCalls { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.agentApiCalls li {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 8px;
+  font-size: 11px; color: #475569; padding: 4px 6px;
+  background: #f8fafc; border-radius: 5px;
+}
+.agentApiCalls li em { font-style: normal; color: #94a3b8; }
+.agentApiCalls li b { font-weight: 600; color: #1f3a5f; }
+.agentApiCalls li.failed { color: #b42318; }

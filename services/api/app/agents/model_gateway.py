@@ -39,6 +39,25 @@ class GatewayUnavailable(RuntimeError):
     pass
 
 
+def _record(*, purpose: str, model: str, ok: bool, duration_ms: int,
+            usage: dict | None = None, error: str | None = None,
+            project_id: str | None = None) -> None:
+    """把每次模型调用记进 model_calls 表；记账失败不影响主流程。"""
+    try:
+        from .store import AgentStore
+        usage = usage or {}
+        AgentStore().record_model_call(
+            project_id=project_id, purpose=purpose, model=model, ok=ok,
+            status='ok' if ok else 'error', attempts=1,
+            duration_ms=max(0, int(duration_ms)),
+            prompt_tokens=usage.get('prompt_tokens'),
+            completion_tokens=usage.get('completion_tokens'),
+            error_type=error, cost_source='not_configured',
+        )
+    except Exception:
+        pass
+
+
 def _endpoint() -> str:
     base=_setting('BASE_URL','https://api.openai.com/v1').rstrip('/')
     url=urllib.parse.urlparse(base)
@@ -93,6 +112,8 @@ class ModelGateway:
         model=_setting('MODEL_REASONING')
         if not key or not model:
             return {'status':'not_configured','summary':None,'usage':None}
+        import time as _time
+        _started=_time.time()
         try:
             endpoint=_endpoint()
             sanitized=[{'code':str(x.get('code',''))[:80],
@@ -125,10 +146,16 @@ class ModelGateway:
             summary=obj.get('summary')
             if not isinstance(summary,str) or not summary.strip():
                 raise GatewayUnavailable('模型未给出合法摘要')
+            _record(purpose='annotation', model=model, ok=True,
+                    duration_ms=int((_time.time()-_started)*1000),
+                    usage=data.get('usage') or {}, project_id=project_id)
             return {'status':'annotated_untrusted','summary':summary[:350],
                     'usage':{k:int(v) for k,v in (data.get('usage') or {}).items()
                              if k in ('prompt_tokens','completion_tokens','total_tokens') and isinstance(v,int)}}
         except Exception as exc:
+            _record(purpose='annotation', model=model, ok=False,
+                    duration_ms=int((_time.time()-_started)*1000),
+                    error=type(exc).__name__, project_id=project_id)
             # The deterministic engineering pipeline MUST remain usable offline.
             return {'status':'unavailable_fallback','summary':None,'usage':None,
                     'errorType':type(exc).__name__}
@@ -184,8 +211,14 @@ def test_connection() -> dict:
         with urllib.request.urlopen(request, timeout=20, context=ssl.create_default_context()) as reply:
             data = json.loads(reply.read(200_001))
         content = (data['choices'][0]['message']['content'] or '').strip()
+        _record(purpose='connection_test', model=model, ok=True,
+                duration_ms=int((time.time() - started) * 1000),
+                usage=data.get('usage') or {})
         return {'ok': True, 'latencyMs': int((time.time() - started) * 1000),
                 'model': model, 'reply': content[:40]}
     except Exception as exc:
+        _record(purpose='connection_test', model=model, ok=False,
+                duration_ms=int((time.time() - started) * 1000),
+                error=type(exc).__name__)
         return {'ok': False, 'reason': f'{type(exc).__name__}: {exc}'[:200],
                 'latencyMs': int((time.time() - started) * 1000)}

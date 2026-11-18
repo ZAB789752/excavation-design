@@ -78,6 +78,17 @@ def test_model_connection(request:Request):
     return test_connection()
 
 
+@router.get('/model/calls')
+def model_call_log(limit:int=20):
+    """最近的真实模型调用：时间、用途、模型、token、耗时。"""
+    from .store import AgentStore
+    rows=AgentStore().model_calls(limit=max(1,min(limit,200)))
+    totals={'calls':len(rows),
+            'promptTokens':sum(int(r.get('promptTokens') or 0) for r in rows),
+            'completionTokens':sum(int(r.get('completionTokens') or 0) for r in rows)}
+    return {'calls':rows,'totals':totals}
+
+
 @router.get('/roles')
 def agent_roles():
     """The eight professional roles and whether each one can run today."""
