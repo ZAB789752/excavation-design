@@ -311,6 +311,51 @@ async def calculation_book_batch(request:Request,
             'poll':'GET /api/tasks/{taskId}','formalConstructionIssue':False}
 
 
+@router.post('/calculation-book/import')
+async def calculation_book_import(request:Request, file:UploadFile=File(...)):
+    """列表页拖入计算书：先数剖面。一个就单项目，多个就建分组。"""
+    identity=_actor(request)
+    if ROLE_RANK.get(identity.role,0)<ROLE_RANK['designer']:
+        raise HTTPException(403,detail='导入计算书要求设计人员权限')
+    data=await file.read()
+    if not data or not data.lstrip()[:5].startswith(b'%PDF'):
+        raise HTTPException(400,detail='请上传有效的计算书 PDF')
+    from pathlib import Path
+    from uuid import uuid4
+    from app.agents import calculation_book_autopilot as autopilot
+    from app.tasks.manager import task_manager
+    from app.schemas.domain import Project
+    from app.storage.repository import ProjectRepository, shared_project_store
+
+    filename=file.filename or 'calculation-book.pdf'
+    inbox=Path(__file__).resolve().parents[2]/'runtime'/'inbox'
+    inbox.mkdir(parents=True,exist_ok=True)
+    target=inbox/f"import-{uuid4().hex[:12]}.pdf"
+    target.write_bytes(data)
+
+    try:
+        titles=[b['title'] for b in autopilot._layer_blocks(autopilot.extract_text(data)) if b['title']]
+    except Exception:
+        titles=[]
+    repo=ProjectRepository(store=shared_project_store())
+    stem=Path(filename).stem[:40]
+
+    if len(titles)<=1:
+        project=repo.create(Project(name=stem),actor=identity.actor)
+        task=task_manager.submit(project.id,'calculation_book_autopilot',{
+            'projectId':project.id,'sourcePath':str(target),'filename':filename,
+            'actor':identity.actor,'section':titles[0] if titles else None})
+        return {'mode':'single','taskId':task.id,'projectId':project.id,
+                'sections':titles,'formalConstructionIssue':False}
+
+    parent=repo.create(Project(name=f'{stem}（{len(titles)} 个剖面）'),actor=identity.actor)
+    task=task_manager.submit(parent.id,'calculation_book_batch',{
+        'projectId':parent.id,'sourcePath':str(target),'filename':filename,
+        'actor':identity.actor,'sections':titles})
+    return {'mode':'group','taskId':task.id,'groupId':parent.id,'count':len(titles),
+            'sections':titles,'formalConstructionIssue':False}
+
+
 @router.get('/calculation-book/status')
 def calculation_book_status(request:Request,project_id:str=Query(min_length=1,max_length=100)):
     """计算书流水线走到哪、卡在什么上、当前计算结论是什么。"""

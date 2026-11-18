@@ -292,3 +292,20 @@ def delete_project(project_id: str, repo: ProjectRepository = Depends(get_reposi
         "projectName": project.name,
         **cleanup,
     }
+
+@router.get("/{project_id}/group")
+def project_group(project_id: str, repo: ProjectRepository = Depends(get_repository)) -> dict:
+    """多剖面分组：返回父项目下的子项目摘要。"""
+    parent = repo.require(project_id)
+    group = dict((parent.advanced_engineering or {}).get("bookGroup") or {})
+    children = []
+    for child in group.get("children") or []:
+        try:
+            item = repo.require(str(child.get("id")))
+            children.append({"id": item.id, "name": item.name, "section": child.get("section"),
+                             "status": child.get("status"),
+                             "updatedAt": item.updated_at.isoformat() if getattr(item, "updated_at", None) else None})
+        except Exception:
+            continue
+    return {"groupId": parent.id, "filename": group.get("filename"),
+            "sections": group.get("sections") or [], "children": children}

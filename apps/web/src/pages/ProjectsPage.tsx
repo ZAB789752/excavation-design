@@ -1,5 +1,6 @@
+import BookDropPet from '../components/BookDropPet';
 import ModelSettingsDialog from '../components/ModelSettingsDialog';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import type { Project, ProjectSummary } from '../types/domain';
 
@@ -138,6 +139,28 @@ export default function ProjectsPage({ onOpen }: { onOpen: (project: Project) =>
   }
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [groupChildren, setGroupChildren] = useState<Record<string, Array<{ id: string; name: string; section?: string }>>>({});
+  const [groupBusy, setGroupBusy] = useState(false);
+
+  async function toggleGroup(id: string) {
+    if (expandedGroup === id) { setExpandedGroup(null); return; }
+    setExpandedGroup(id);
+    if (groupChildren[id]) return;
+    setGroupBusy(true);
+    try {
+      const value = await api.projectGroup(id);
+      setGroupChildren((prev) => ({ ...prev, [id]: value.children ?? [] }));
+    } catch { /* 忽略：展开失败不影响列表 */ }
+    finally { setGroupBusy(false); }
+  }
+
+  async function openChild(id: string) {
+    try {
+      const project = await api.getProject(id);
+      await openProject(project as never);
+    } catch { /* 打开失败由上层提示 */ }
+  }
 
   return (
     <main className="page" aria-busy={refreshing || creating || Boolean(openingId)}>
@@ -162,9 +185,16 @@ export default function ProjectsPage({ onOpen }: { onOpen: (project: Project) =>
         <table className="table">
           <thead><tr><th>名称</th><th>地点</th><th>存储</th><th>更新时间</th><th>操作</th></tr></thead>
           <tbody>
-            {projects.map((project) => (
-              <tr key={project.id} className={project.optimistic ? 'optimisticRow' : undefined}>
-                <td>{project.name}{project.optimistic ? <small className="pendingLabel">正在创建</small> : null}</td>
+            {projects.map((project) => {
+              const isGroup = /（\d+ 个剖面）$/.test(project.name);
+              return (
+              <Fragment key={project.id}>
+              <tr className={project.optimistic ? 'optimisticRow' : undefined}>
+                <td>{isGroup ? (
+                  <button type="button" className="groupToggle" onClick={() => void toggleGroup(project.id)}>
+                    {expandedGroup === project.id ? '▾' : '▸'}
+                  </button>
+                ) : null}{project.name}{project.optimistic ? <small className="pendingLabel">正在创建</small> : null}</td>
                 <td>{project.location ?? '-'}</td>
                 <td><span className={`statusTag ${project.storageStatus === 'workspace_only' || project.storageStatus === 'large' ? 'warning' : project.storageStatus === 'elevated' ? 'info' : 'pass'}`} title={project.storageStatus === 'workspace_only' ? '完整快照由后台 worker 按需读取，网页仅加载轻量工作区。' : undefined}>{project.optimistic ? '准备中' : project.storageStatus === 'workspace_only' ? `工作区模式 · 核心 ${((project.payloadBytes ?? 0) / 1048576).toFixed(1)} MB` : project.payloadBytes ? `核心 ${(project.payloadBytes / 1048576).toFixed(1)} MB${project.externalBytes ? ` · 外部 ${(project.externalBytes / 1048576).toFixed(1)} MB` : ''}` : '常规'}</span></td>
                 <td>{new Date(project.updatedAt).toLocaleString()}</td>
@@ -176,12 +206,26 @@ export default function ProjectsPage({ onOpen }: { onOpen: (project: Project) =>
                   {openingId === project.id ? <div className="rowProgress"><span style={{ width: `${openProgress}%` }} /></div> : null}
                 </td>
               </tr>
-            ))}
+              {isGroup && expandedGroup === project.id ? (
+                groupBusy && !groupChildren[project.id]
+                  ? <tr className="groupChild"><td colSpan={5}>正在读取分组…</td></tr>
+                  : (groupChildren[project.id] ?? []).map((child) => (
+                    <tr key={child.id} className="groupChild">
+                      <td>└ {child.section ?? child.name}</td>
+                      <td>-</td><td>-</td><td>-</td>
+                      <td><div className="table-actions"><button type="button" disabled={Boolean(openingId)} onClick={() => void openChild(child.id)}>打开</button></div></td>
+                    </tr>
+                  ))
+              ) : null}
+              </Fragment>
+              );
+            })}
             {projects.length === 0 && !refreshing && <tr><td colSpan={5}>暂无项目</td></tr>}
             {projects.length === 0 && refreshing && <tr><td colSpan={5}><span className="inlineBusy"><i />正在加载项目列表</span></td></tr>}
           </tbody>
         </table>
       </section>
+      <BookDropPet onImported={() => void refresh(true)} />
       {settingsOpen ? <ModelSettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
     </main>
   );

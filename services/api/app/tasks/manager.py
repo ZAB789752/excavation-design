@@ -2995,6 +2995,7 @@ class TaskManager:
         text = autopilot.extract_text(source.read_bytes())
         titles = [block["title"] for block in autopilot._layer_blocks(text) if block["title"]]
         requested = payload.get("sections") or titles
+        group_parent = task.project_id
         rows: list[dict[str, Any]] = []
         for index, section in enumerate(requested, start=1):
             self._stage(task, min(95, int(index * 100 / max(1, len(requested)))),
@@ -3034,8 +3035,20 @@ class TaskManager:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
+        try:
+            parent = repo.require(group_parent)
+            parent.advanced_engineering["bookGroup"] = {
+                "filename": filename,
+                "sections": [row["section"] for row in rows],
+                "children": [{"id": row["projectId"], "section": row["section"],
+                              "status": row.get("status")} for row in rows],
+            }
+            repo.save(parent, actor=actor, action="autopilot.book_group",
+                      summary=f"计算书分组：{len(rows)} 个剖面")
+        except Exception:
+            pass
         return {"filename": filename, "sectionCount": len(rows), "rows": rows,
-                "csv": str(csv_path), "refreshProject": False}
+                "csv": str(csv_path), "groupId": group_parent, "refreshProject": False}
 
     def _run_coordinated_delivery_export(self, task: TaskRecord, payload: dict[str, Any]) -> dict[str, Any]:
         from app.services.delivery_package import export_coordinated_delivery_package
