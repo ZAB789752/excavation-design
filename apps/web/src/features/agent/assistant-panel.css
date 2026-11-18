@@ -172,7 +172,7 @@
 .agentDockAttach:disabled { opacity: .45; cursor: default; }
 .agentDockInput {
   flex: 1; min-width: 0; box-sizing: border-box; padding: 8px 9px;
-  min-height: 52px; max-height: 132px; resize: none;
+  min-height: 78px; max-height: 180px; resize: none;
   font-size: 12.5px; line-height: 1.55;
   border: 1px solid #dbe3ec; border-radius: 9px; background: #fff; color: #172033; font-family: inherit;
 }

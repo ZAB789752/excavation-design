@@ -109,7 +109,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [dragging, setDragging] = useState(false);
   const [viewport, setViewport] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
   const threadRef = useRef<HTMLDivElement>(null);
-  const attachRef = useRef<HTMLInputElement>(null);
   const loadedRef = useRef(false);
   const noticeSeq = useRef(0);
   const lastSignature = useRef('');
@@ -577,9 +576,9 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const roomLeft = ballLeft - 8;
   const panelWidth = Math.min(356, viewport.w - 40);
   const horizontal = roomRight >= panelWidth || roomRight >= roomLeft ? 'fromLeft' : 'fromRight';
-  const roomHeight = Math.max(240, Math.min(500, vertical === 'above' ? roomAbove : roomBelow));
+  const roomHeight = Math.max(320, Math.min(620, vertical === 'above' ? roomAbove : roomBelow));
   // 没有消息时不撑满一屏，否则会被误认成输入框
-  const dockHeight = messages.length ? roomHeight : Math.min(roomHeight, 206);
+  const dockHeight = messages.length ? roomHeight : Math.min(roomHeight, 340);
   const placement = `place-${vertical}-${horizontal}`;
 
   return (
@@ -605,13 +604,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
             {gap.text}
           </div>
 
-          {messages.length === 0 ? (
-            <div className="agentDockEmpty">
-              <strong>把计算书拖进来</strong>
-              <span>PDF 跑全流程；Excel / Word / CSV / 图片补参数</span>
-              <span className="agentDockEmptyExample">例：施工荷载 30kPa，安全等级三级</span>
-            </div>
-          ) : (
+          {messages.length === 0 ? null : (
           <div className="agentDockMessages" ref={threadRef}>
             {messages.map((message) => (
               message.role === 'tool' ? (
@@ -660,40 +653,19 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
               <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
               P3
             </label>
-            <button
-              type="button"
-              className="agentDockAttach"
-              onClick={() => attachRef.current?.click()}
-              disabled={attachBusy}
-              title="上传 PDF 或提取结果 JSON，自动填入设计基准"
-              aria-label="上传文件自动填入设计基准"
-            >
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M21.44 11.05l-9.19 9.19a5 5 0 01-7.07-7.07l9.19-9.19a3 3 0 014.24 4.24l-9.19 9.19a1 1 0 01-1.41-1.41l8.49-8.49" />
-              </svg>
-            </button>
-            <input
-              ref={attachRef}
-              type="file"
-              accept=".pdf,.docx,.xlsx,.csv,.txt,.md,.png,.jpg,.jpeg,.json"
-              hidden
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void ingestFile(file);
-                event.target.value = '';
-              }}
-            />
             </div>
             <div className="agentDockComposeInput">
               <textarea
                 className="agentDockInput"
-                rows={2}
+                rows={3}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
                 }}
-                placeholder={attachBusy ? (attachStage || '正在读取文件…') : '说一句就能改参数，例如：施工荷载改成 35kPa'}
+                placeholder={attachBusy
+                  ? (attachStage || '正在读取文件…')
+                  : '把 PDF / Excel / Word / 图片 拖进来；也可以直接说：施工荷载改成 35kPa'}
                 aria-label="向智能设计助手提问"
               />
               <button type="button" className="agentDockSend" onClick={() => void send()} disabled={busy || attachBusy || !draft.trim()}>
