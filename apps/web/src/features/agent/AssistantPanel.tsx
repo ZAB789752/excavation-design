@@ -614,6 +614,88 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     >
       {open ? (
         <aside className="agentDock" style={{ height: dockHeight }} aria-label="智能设计助手">
+          {apiOpen ? (
+            <div className="agentDockSettings">
+              <header className="agentDockSettingsHead">
+                <button type="button" className="agentDockBack" onClick={() => setApiOpen(false)}>← 返回</button>
+                <strong>设置</strong>
+              </header>
+              <div className="agentDockSettingsBody">
+                <div className="agentApiSectionTitle">上传</div>
+                <label>剖面
+                  <select value={section} onChange={(event) => setSection(event.target.value)}>
+                    <option value="">自动（优先 2-2）</option>
+                    <option value="1-1">1-1</option>
+                    <option value="1'-1'">1'-1'</option>
+                    <option value="2-2">2-2</option>
+                    <option value="3-3">3-3</option>
+                    <option value="3'-3'">3'-3'</option>
+                    <option value="4-4">4-4</option>
+                    <option value="4'-4'">4'-4'</option>
+                    <option value="5-5">5-5</option>
+                    <option value="5'-5'">5'-5'</option>
+                    <option value="出土口">出土口</option>
+                  </select>
+                </label>
+                <label className="agentApiToggle">
+                  <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />
+                  批量：全书每个剖面各算一遍（只算不出包，约 40 分钟）
+                </label>
+                <label className="agentApiToggle">
+                  <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
+                  P3：出包后继续跑预埋件与套筒深化（耗时长）
+                </label>
+                <div className="agentApiSectionTitle">模型接入</div>
+                <p className="agentApiHint">{apiCfg?.configured ? `已配置 ${apiCfg.keyHint ?? ''}` : '尚未配置 Key'}{apiCfg?.source ? ` · 来源 ${apiCfg.source}` : ''}</p>
+                <label className="agentApiToggle">
+                  <input type="checkbox" checked={Boolean(apiCfg?.enabled)}
+                    onChange={(event) => setApiCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
+                  启用（仅参数理解、路由、扫描件；不参与数值判定）
+                </label>
+                <label>服务地址
+                  <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
+                </label>
+                <label>模型 fast
+                  <input value={apiModelFast} onChange={(event) => setApiModelFast(event.target.value)} />
+                </label>
+                <label>模型 reasoning
+                  <input value={apiModelReasoning} onChange={(event) => setApiModelReasoning(event.target.value)} />
+                </label>
+                <label>API Key
+                  <input type="password" value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)}
+                    placeholder={apiCfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
+                </label>
+                <label>允许域名
+                  <input value={apiHosts} onChange={(event) => setApiHosts(event.target.value)} />
+                </label>
+                <div className="agentApiSectionTitle">调用记录</div>
+                <p className="agentApiHint">
+                  {callLog ? `共 ${callLog.totals.calls} 次 · 输入 ${callLog.totals.promptTokens} / 输出 ${callLog.totals.completionTokens}` : '正在读取…'}
+                </p>
+                {callLog?.calls?.length ? (
+                  <ul className="agentApiCalls">
+                    {callLog.calls.slice(0, 3).map((call) => (
+                      <li key={call.id} className={call.ok ? '' : 'failed'}>
+                        <span>{String(call.createdAt).slice(5, 16).replace('T', ' ')}</span>
+                        <em>{call.purpose}</em>
+                        <b>{call.promptTokens ?? '-'} / {call.completionTokens ?? '-'}</b>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {apiError ? <p className="agentApiError">{apiError}</p> : null}
+                {apiTest ? (
+                  <p className={apiTest.ok ? 'agentApiOk' : 'agentApiError'}>
+                    {apiTest.ok ? `连通正常 · ${apiTest.latencyMs ?? '-'} ms` : `失败：${apiTest.reason ?? ''}`}
+                  </p>
+                ) : null}
+              </div>
+              <footer className="agentDockSettingsFoot">
+                <button type="button" onClick={() => void saveApiConfig()} disabled={apiBusy}>{apiBusy ? '处理中…' : '保存'}</button>
+                <button type="button" className="secondary" onClick={() => void testApiConfig()} disabled={apiBusy}>测试连接</button>
+              </footer>
+            </div>
+          ) : (<>
           <header className="agentDockHeader">
             <div>
               <strong>智能设计助手</strong>
@@ -670,6 +752,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           </footer>
 
           {error ? <p className="agentDockError" role="alert">{error}</p> : null}
+          </>)}
         </aside>
       ) : (
         notices.length ? <div className="agentDockToasts">{renderNotices()}</div> : null
@@ -699,91 +782,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       </div>
 
 
-      {apiOpen ? (
-        <div className="agentApiOverlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setApiOpen(false); }}>
-          <section className="agentApiCard" aria-label="模型接入设置">
-            <header>
-              <div>
-                <strong>设置</strong>
-                <span>上传方式与模型接入；改完即时生效</span>
-              </div>
-              <button type="button" className="secondary" onClick={() => setApiOpen(false)}>关闭</button>
-            </header>
-            <div className="agentApiSectionTitle">上传</div>
-            <label>剖面（仅单份 PDF 生效）
-              <select className="agentApiSelect" value={section} onChange={(event) => setSection(event.target.value)}>
-                <option value="">自动（优先 2-2）</option>
-                <option value="1-1">1-1</option>
-                <option value="1'-1'">1'-1'</option>
-                <option value="2-2">2-2</option>
-                <option value="3-3">3-3</option>
-                <option value="3'-3'">3'-3'</option>
-                <option value="4-4">4-4</option>
-                <option value="4'-4'">4'-4'</option>
-                <option value="5-5">5-5</option>
-                <option value="5'-5'">5'-5'</option>
-                <option value="出土口">出土口</option>
-              </select>
-            </label>
-            <label className="agentApiToggle">
-              <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />
-              批量：全书每个剖面各算一遍（只算不出包，约 40 分钟）
-            </label>
-            <label className="agentApiToggle">
-              <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
-              P3：出包后继续跑预埋件与套筒深化（耗时长，默认关）
-            </label>
-            <div className="agentApiSectionTitle">模型接入</div>
-            <p className="agentApiHint">{apiCfg?.configured ? `已配置 ${apiCfg.keyHint ?? ''}` : '尚未配置 Key'}{apiCfg?.source ? ` · 来源 ${apiCfg.source}` : ''}</p>
-            <label className="agentApiToggle">
-              <input type="checkbox" checked={Boolean(apiCfg?.enabled)}
-                onChange={(event) => setApiCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
-              启用（仅用于参数理解、总控路由、扫描件识别；不参与数值与规范判定）
-            </label>
-            <label>服务地址
-              <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
-            </label>
-            <label>模型（fast）
-              <input value={apiModelFast} onChange={(event) => setApiModelFast(event.target.value)} placeholder="如 deepseek-v4.1-flash" />
-            </label>
-            <label>模型（reasoning，可留空）
-              <input value={apiModelReasoning} onChange={(event) => setApiModelReasoning(event.target.value)} />
-            </label>
-            <label>API Key
-              <input type="password" value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)}
-                placeholder={apiCfg?.configured ? '已保存，留空则不修改' : '粘贴 sk-…'} autoComplete="off" />
-            </label>
-            <label>允许域名（逗号分隔）
-              <input value={apiHosts} onChange={(event) => setApiHosts(event.target.value)} placeholder="discovery-api.intern-ai.org.cn" />
-            </label>
-            <div className="agentApiSectionTitle">调用记录</div>
-            <p className="agentApiHint">
-              {callLog ? `共 ${callLog.totals.calls} 次 · 输入 ${callLog.totals.promptTokens} / 输出 ${callLog.totals.completionTokens} tokens` : '正在读取…'}
-            </p>
-            {callLog?.calls?.length ? (
-              <ul className="agentApiCalls">
-                {callLog.calls.slice(0, 4).map((call) => (
-                  <li key={call.id} className={call.ok ? '' : 'failed'}>
-                    <span>{String(call.createdAt).slice(5, 16).replace('T', ' ')}</span>
-                    <em>{call.purpose}</em>
-                    <b>{call.promptTokens ?? '-'} / {call.completionTokens ?? '-'}</b>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {apiError ? <p className="agentApiError">{apiError}</p> : null}
-            {apiTest ? (
-              <p className={apiTest.ok ? 'agentApiOk' : 'agentApiError'}>
-                {apiTest.ok ? `连通正常 · ${apiTest.latencyMs ?? '-'} ms · ${apiTest.model ?? ''}` : `连接失败：${apiTest.reason ?? ''}`}
-              </p>
-            ) : null}
-            <footer>
-              <button type="button" onClick={() => void saveApiConfig()} disabled={apiBusy}>{apiBusy ? '处理中…' : '保存'}</button>
-              <button type="button" className="secondary" onClick={() => void testApiConfig()} disabled={apiBusy}>测试连接</button>
-            </footer>
-          </section>
-        </div>
-      ) : null}
+
     </div>
   );
 }
