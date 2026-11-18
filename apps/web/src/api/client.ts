@@ -537,6 +537,18 @@ export const api = {
         method: 'POST', body: form, timeoutMs: 180000, responseIdleTimeoutMs: 180000,
         activity: { label: '多剖面批量计算' } });
   },
+  modelConfiguration: () => request<{
+    enabled: boolean; configured: boolean; keyHint?: string; source?: string;
+    baseUrl?: string; modelSlots?: Record<string, string>; allowedHosts?: string[];
+    note?: string;
+  }>('/api/agents/model/configuration', { activity: { quiet: true, cacheTtlMs: 0 } }),
+  saveModelConfiguration: (payload: Record<string, string>) => request<Record<string, unknown>>(
+    '/api/agents/model/configuration', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), activity: { label: '正在保存模型接入' } }),
+  testModelConnection: () => request<{
+    ok: boolean; reason?: string; latencyMs?: number; model?: string; reply?: string;
+  }>('/api/agents/model/test', { method: 'POST', timeoutMs: 40000, activity: { label: '正在测试模型连通' } }),
   taskStatus: (taskId: string) => request<{
     id: string; status: string; progress: number; currentStep?: string; error?: string | null;
   }>(`/api/tasks/${taskId}`, { method: 'GET' }),

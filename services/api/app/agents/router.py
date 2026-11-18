@@ -9,7 +9,7 @@ from .contracts import (StartRun,RunDecision,ConversationCreate,MessageCreate,
 from .store import AgentStore,ConflictError
 from .catalog import catalog
 from .engine import AgentRuntime
-from .model_gateway import configuration
+from .model_gateway import configuration, GatewayUnavailable, test_connection, update_configuration
 from . import assistant
 from . import document_agent
 from . import tools as tool_registry
@@ -58,6 +58,24 @@ def get_agent_catalog():
 @router.get('/model/configuration')
 def model_configuration():
     return configuration()
+
+
+@router.put('/model/configuration')
+def save_model_configuration(request:Request, body:dict):
+    """桌宠右键里改 API 接入：写 runtime/llm_settings.json，立即生效。"""
+    identity=_actor(request)
+    if ROLE_RANK.get(identity.role,0)<ROLE_RANK.get('admin',50):
+        raise HTTPException(403,detail='修改模型接入需要管理员权限')
+    try:
+        return update_configuration(body or {})
+    except GatewayUnavailable as exc:
+        raise HTTPException(400,detail=str(exc)) from exc
+
+
+@router.post('/model/test')
+def test_model_connection(request:Request):
+    _actor(request)
+    return test_connection()
 
 
 @router.get('/roles')

@@ -15,6 +15,10 @@ type Props = {
   onProjectChanged?: () => void;
 };
 type Notice = { id: number; kind: 'alert' | 'error'; title: string; text: string };
+type ModelConfig = {
+  enabled: boolean; configured: boolean; keyHint?: string; source?: string;
+  baseUrl?: string; modelSlots?: Record<string, string>; allowedHosts?: string[];
+};
 type Gap = { text: string; items: string[]; tone: 'ok' | 'warn' | 'error' };
 
 const POLL_INTERVAL_MS = 15000;
@@ -82,6 +86,17 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [section, setSection] = useState('');
   const [runP3, setRunP3] = useState(false);
   const [batchAll, setBatchAll] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [apiOpen, setApiOpen] = useState(false);
+  const [apiCfg, setApiCfg] = useState<ModelConfig | null>(null);
+  const [apiBaseUrl, setApiBaseUrl] = useState('');
+  const [apiModelFast, setApiModelFast] = useState('');
+  const [apiModelReasoning, setApiModelReasoning] = useState('');
+  const [apiHosts, setApiHosts] = useState('');
+  const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [apiTest, setApiTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number; model?: string } | null>(null);
+  const [apiBusy, setApiBusy] = useState(false);
+  const [apiError, setApiError] = useState('');
   const [petOffset, setPetOffset] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || 'null');
@@ -492,6 +507,45 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     void ingestFile(file);
   }, [ingestFile, pushNotice]);
 
+  const openApiConfig = useCallback(async () => {
+    setMenu(null); setApiOpen(true); setApiError(''); setApiTest(null);
+    try {
+      const cfg = await api.modelConfiguration();
+      setApiCfg(cfg);
+      setApiBaseUrl(cfg.baseUrl ?? '');
+      setApiModelFast(cfg.modelSlots?.fast ?? '');
+      setApiModelReasoning(cfg.modelSlots?.reasoning ?? '');
+      setApiHosts((cfg.allowedHosts ?? []).join(','));
+      setApiKeyDraft('');
+    } catch (error) { setApiError(String(error)); }
+  }, []);
+
+  const saveApiConfig = useCallback(async () => {
+    setApiBusy(true); setApiError('');
+    try {
+      const payload: Record<string, string> = {
+        ENABLE: apiCfg?.enabled ? '1' : '0',
+        BASE_URL: apiBaseUrl.trim(),
+        MODEL_FAST: apiModelFast.trim(),
+        MODEL_REASONING: apiModelReasoning.trim(),
+        ALLOWED_HOSTS: apiHosts.trim(),
+      };
+      if (apiKeyDraft.trim()) payload.API_KEY = apiKeyDraft.trim();
+      const saved = await api.saveModelConfiguration(payload);
+      setApiCfg(saved as unknown as ModelConfig);
+      setApiKeyDraft('');
+      pushNotice('alert', '模型接入已保存', '配置立即生效，无需重启服务');
+    } catch (error) { setApiError(String(error)); }
+    finally { setApiBusy(false); }
+  }, [apiCfg, apiBaseUrl, apiModelFast, apiModelReasoning, apiHosts, apiKeyDraft, pushNotice]);
+
+  const testApiConfig = useCallback(async () => {
+    setApiBusy(true); setApiError(''); setApiTest(null);
+    try { setApiTest(await api.testModelConnection()); }
+    catch (error) { setApiTest({ ok: false, reason: String(error) }); }
+    finally { setApiBusy(false); }
+  }, []);
+
   const failCount = status?.failCount ?? 0;
   const badge = status?.statusUnavailable || notices.some((n) => n.kind === 'error')
     ? '!'
@@ -530,6 +584,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     <div
       className={`agentPet ${placement} ${dragging ? 'isDragging' : ''} ${dropActive ? 'isDropActive' : ''}`}
       style={{ transform: `translate(${petOffset.x}px, ${petOffset.y}px)` }}
+      onContextMenu={(event) => { event.preventDefault(); setMenu({ x: event.clientX, y: event.clientY }); }}
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
@@ -665,6 +720,59 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
         </button>
         {badge ? <span className="agentPetBadge">{badge}</span> : null}
       </div>
+
+      {menu ? (
+        <div className="agentPetMenu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
+          <button type="button" onClick={() => void openApiConfig()}>API 接入设置</button>
+          <button type="button" onClick={() => { setMenu(null); setOpen(true); }}>打开面板</button>
+          <button type="button" onClick={() => { setMenu(null); resetPetPosition(); }}>回到原位</button>
+        </div>
+      ) : null}
+
+      {apiOpen ? (
+        <div className="agentApiOverlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setApiOpen(false); }}>
+          <section className="agentApiCard" aria-label="模型接入设置">
+            <header>
+              <div>
+                <strong>模型接入</strong>
+                <span>{apiCfg?.configured ? `已配置 ${apiCfg.keyHint ?? ''}` : '尚未配置 Key'}{apiCfg?.source ? ` · 来源 ${apiCfg.source}` : ''}</span>
+              </div>
+              <button type="button" className="secondary" onClick={() => setApiOpen(false)}>关闭</button>
+            </header>
+            <label className="agentApiToggle">
+              <input type="checkbox" checked={Boolean(apiCfg?.enabled)}
+                onChange={(event) => setApiCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
+              启用（仅用于参数理解、总控路由、扫描件识别；不参与数值与规范判定）
+            </label>
+            <label>服务地址
+              <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
+            </label>
+            <label>模型（fast）
+              <input value={apiModelFast} onChange={(event) => setApiModelFast(event.target.value)} placeholder="如 deepseek-v4.1-flash" />
+            </label>
+            <label>模型（reasoning，可留空）
+              <input value={apiModelReasoning} onChange={(event) => setApiModelReasoning(event.target.value)} />
+            </label>
+            <label>API Key
+              <input type="password" value={apiKeyDraft} onChange={(event) => setApiKeyDraft(event.target.value)}
+                placeholder={apiCfg?.configured ? '已保存，留空则不修改' : '粘贴 sk-…'} autoComplete="off" />
+            </label>
+            <label>允许域名（逗号分隔）
+              <input value={apiHosts} onChange={(event) => setApiHosts(event.target.value)} placeholder="discovery-api.intern-ai.org.cn" />
+            </label>
+            {apiError ? <p className="agentApiError">{apiError}</p> : null}
+            {apiTest ? (
+              <p className={apiTest.ok ? 'agentApiOk' : 'agentApiError'}>
+                {apiTest.ok ? `连通正常 · ${apiTest.latencyMs ?? '-'} ms · ${apiTest.model ?? ''}` : `连接失败：${apiTest.reason ?? ''}`}
+              </p>
+            ) : null}
+            <footer>
+              <button type="button" onClick={() => void saveApiConfig()} disabled={apiBusy}>{apiBusy ? '处理中…' : '保存'}</button>
+              <button type="button" className="secondary" onClick={() => void testApiConfig()} disabled={apiBusy}>测试连接</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -265,3 +265,65 @@
   white-space: nowrap;
 }
 .agentDockP3 input { margin: 0; }
+
+.agentPetMenu {
+  position: fixed;
+  z-index: 60;
+  min-width: 150px;
+  background: #fff;
+  border: 1px solid rgba(31, 58, 95, 0.14);
+  border-radius: 8px;
+  box-shadow: 0 10px 26px rgba(15, 35, 60, 0.18);
+  padding: 4px;
+  display: grid;
+}
+.agentPetMenu button {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: #1f3a5f;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.agentPetMenu button:hover { background: rgba(31, 58, 95, 0.07); }
+
+.agentApiOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(15, 30, 50, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.agentApiCard {
+  width: min(440px, calc(100vw - 40px));
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 24px 60px rgba(10, 25, 45, 0.28);
+  display: grid;
+  gap: 10px;
+}
+.agentApiCard header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.agentApiCard header strong { display: block; font-size: 14px; color: #1f3a5f; }
+.agentApiCard header span { font-size: 11px; color: #6b7c93; }
+.agentApiCard label { display: grid; gap: 4px; font-size: 12px; color: #34495e; }
+.agentApiCard label input[type="text"],
+.agentApiCard label input[type="password"] {
+  height: 30px;
+  border: 1px solid rgba(31, 58, 95, 0.2);
+  border-radius: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: #1f3a5f;
+}
+.agentApiToggle { grid-template-columns: 16px 1fr; align-items: center; gap: 6px; line-height: 1.5; }
+.agentApiToggle input { margin: 0; }
+.agentApiCard footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.agentApiError { margin: 0; font-size: 12px; color: #b42318; }
+.agentApiOk { margin: 0; font-size: 12px; color: #1d7a4f; }

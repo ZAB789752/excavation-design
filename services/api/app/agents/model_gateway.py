@@ -11,7 +11,28 @@ import socket
 import ssl
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Callable
+
+SETTINGS_PATH = Path(os.getenv('PITGUARD_LLM_SETTINGS') or
+                     Path(__file__).resolve().parents[2] / 'runtime' / 'llm_settings.json')
+
+
+def _saved() -> dict:
+    try:
+        data = json.loads(SETTINGS_PATH.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _setting(name: str, default: str = '') -> str:
+    """界面保存的值优先，其次环境变量；两者都没有才用默认值。"""
+    saved = _saved()
+    value = saved.get(name)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return os.getenv('PITGUARD_LLM_' + name.upper(), default)
 
 
 class GatewayUnavailable(RuntimeError):
@@ -19,14 +40,14 @@ class GatewayUnavailable(RuntimeError):
 
 
 def _endpoint() -> str:
-    base=os.getenv('PITGUARD_LLM_BASE_URL','https://api.openai.com/v1').strip().rstrip('/')
+    base=_setting('BASE_URL','https://api.openai.com/v1').rstrip('/')
     url=urllib.parse.urlparse(base)
     if url.username or url.password or url.query or url.fragment or url.path not in ('','/','/v1'):
         raise GatewayUnavailable('模型服务地址须为固定根路径或 /v1，不得含凭据或查询参数')
     host=(url.hostname or '').lower()
     if not host:
         raise GatewayUnavailable('缺少模型服务域名')
-    allowed={s.strip().lower() for s in os.getenv('PITGUARD_LLM_ALLOWED_HOSTS','api.openai.com').split(',') if s.strip()}
+    allowed={s.strip().lower() for s in _setting('ALLOWED_HOSTS','api.openai.com').split(',') if s.strip()}
     if host not in allowed:
         raise GatewayUnavailable('模型服务域名未进入管理员允许清单')
     if url.scheme != 'https':
@@ -45,12 +66,18 @@ def _endpoint() -> str:
 
 
 def configuration()->dict:
-    enabled=os.getenv('PITGUARD_LLM_ENABLE','0')=='1'
-    return {'enabled':enabled,'configured':bool(os.getenv('PITGUARD_LLM_API_KEY')),
+    key=_setting('API_KEY')
+    enabled=_setting('ENABLE','0')=='1'
+    saved=_saved()
+    return {'enabled':enabled,'configured':bool(key),
+            'keyHint':('…'+key[-4:]) if len(key)>=4 else '',
+            'source':'file' if saved else 'env',
+            'settingsPath':str(SETTINGS_PATH),
+            'baseUrl':_setting('BASE_URL','https://api.openai.com/v1'),
             'defaultMode':'off','modelSlots':{
-               name:os.getenv('PITGUARD_LLM_MODEL_'+name.upper(),'')
+               name:_setting('MODEL_'+name.upper(),'')
                for name in ('fast','reasoning','vision')},
-            'allowedHosts':sorted({s.strip() for s in os.getenv('PITGUARD_LLM_ALLOWED_HOSTS','api.openai.com').split(',') if s.strip()}),
+            'allowedHosts':sorted({s.strip() for s in _setting('ALLOWED_HOSTS','api.openai.com').split(',') if s.strip()}),
             'externalTransferRequiresOperatorOptIn':True,'toolExecutionByModel':False,
             'note':'仅发送已裁剪的结构化问题摘要；模型输出不参与数值或规范通过判定'}
 
@@ -60,10 +87,10 @@ class ModelGateway:
         self.transport=transport
 
     def annotate(self,*,project_id:str,issues:list[dict],mode:str='off')->dict:
-        if mode!='optional' or os.getenv('PITGUARD_LLM_ENABLE','0')!='1':
+        if mode!='optional' or _setting('ENABLE','0')!='1':
             return {'status':'disabled','summary':None,'usage':None}
-        key=os.getenv('PITGUARD_LLM_API_KEY','').strip()
-        model=os.getenv('PITGUARD_LLM_MODEL_REASONING','').strip()
+        key=_setting('API_KEY')
+        model=_setting('MODEL_REASONING')
         if not key or not model:
             return {'status':'not_configured','summary':None,'usage':None}
         try:
@@ -105,3 +132,60 @@ class ModelGateway:
             # The deterministic engineering pipeline MUST remain usable offline.
             return {'status':'unavailable_fallback','summary':None,'usage':None,
                     'errorType':type(exc).__name__}
+
+
+def update_configuration(payload: dict) -> dict:
+    """界面改配置：写到 runtime/llm_settings.json，不重启即时生效。"""
+    allowed = {'ENABLE', 'API_KEY', 'BASE_URL', 'MODEL_FAST', 'MODEL_REASONING',
+               'MODEL_VISION', 'ALLOWED_HOSTS'}
+    data = _saved()
+    for name in allowed:
+        if name not in payload:
+            continue
+        value = payload.get(name)
+        if value is None:
+            data.pop(name, None)
+            continue
+        text = str(value).strip()
+        if text == '':
+            data.pop(name, None)
+        else:
+            data[name] = text
+    if 'BASE_URL' in data:
+        url = urllib.parse.urlparse(data['BASE_URL'])
+        if url.username or url.password or url.query or url.fragment:
+            raise GatewayUnavailable('模型服务地址不得含凭据或查询参数')
+        if url.scheme != 'https' and url.hostname not in ('localhost', '127.0.0.1', '::1'):
+            raise GatewayUnavailable('非本机模型端点必须使用 HTTPS')
+        host = (url.hostname or '').lower()
+        hosts = data.get('ALLOWED_HOSTS') or _setting('ALLOWED_HOSTS', 'api.openai.com')
+        if host not in {s.strip().lower() for s in hosts.split(',') if s.strip()}:
+            data['ALLOWED_HOSTS'] = ','.join(sorted({*[s.strip() for s in hosts.split(',') if s.strip()], host}))
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return configuration()
+
+
+def test_connection() -> dict:
+    """用最小请求验一次连通性；失败也返回原因，不抛给界面。"""
+    import time
+    key = _setting('API_KEY')
+    model = _setting('MODEL_FAST') or _setting('MODEL_REASONING')
+    if not key or not model:
+        return {'ok': False, 'reason': '还没有填 API Key 或模型名'}
+    started = time.time()
+    try:
+        endpoint = _endpoint()
+        payload = json.dumps({'model': model, 'messages': [
+            {'role': 'user', 'content': '回复两个字母：ok'}],
+            'temperature': 0, 'max_tokens': 8}).encode('utf-8')
+        request = urllib.request.Request(endpoint, data=payload, method='POST', headers={
+            'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
+        with urllib.request.urlopen(request, timeout=20, context=ssl.create_default_context()) as reply:
+            data = json.loads(reply.read(200_001))
+        content = (data['choices'][0]['message']['content'] or '').strip()
+        return {'ok': True, 'latencyMs': int((time.time() - started) * 1000),
+                'model': model, 'reply': content[:40]}
+    except Exception as exc:
+        return {'ok': False, 'reason': f'{type(exc).__name__}: {exc}'[:200],
+                'latencyMs': int((time.time() - started) * 1000)}
