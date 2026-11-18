@@ -81,3 +81,21 @@
   .msProviders { flex-direction: row; display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid #eef2f7; }
   .msProviders button { white-space: nowrap; }
 }
+
+.msReq::before { content: '*'; color: #d92d20; margin-right: 2px; }
+.msHintText { font-style: normal; font-size: 11px; color: #94a3b8; margin-left: auto; }
+.msFieldHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.msFieldHead small { font-size: 11px; color: #94a3b8; line-height: 1.45; }
+.msSwitchMini { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #475569; white-space: nowrap; }
+.msSwitchMini input { width: 13px; height: 13px; }
+.msUrl em { font-style: normal; font-size: 11px; color: #1d7a4f; }
+.msAdvanced {
+  justify-self: start; border: 0; background: transparent; color: #475569;
+  font-size: 12px; padding: 2px 0; cursor: pointer;
+}
+.msAdvanced:hover { color: #1d4ed8; }
+.msFootNote { margin-right: auto; font-size: 11px; color: #94a3b8; line-height: 1.4; }
+.msFoot { align-items: center; }
+@media (max-width: 640px) {
+  .msFootNote { display: none; }
+}

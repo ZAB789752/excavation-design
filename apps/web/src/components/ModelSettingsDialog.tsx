@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client';
 import './model-settings.css';
 
@@ -7,75 +7,74 @@ type ModelConfig = {
   baseUrl?: string; modelSlots?: Record<string, string>;
 };
 
-type Provider = { id: string; name: string; baseUrl: string; models: string[] };
+const DEEPSEEK = {
+  baseUrl: 'https://api.deepseek.com/v1',
+  models: ['deepseek-chat', 'deepseek-reasoner'],
+};
 
-const PROVIDERS: Provider[] = [
-  { id: 'discovery', name: '内部网关', baseUrl: 'https://discovery-api.intern-ai.org.cn/v1',
-    models: ['deepseek-v4.1-flash-1017'] },
-  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1',
-    models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1',
-    models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'] },
-  { id: 'dashscope', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    models: ['qwen-plus', 'qwen-max', 'qwen-turbo'] },
-  { id: 'zhipu', name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    models: ['glm-4-flash', 'glm-4-plus', 'glm-4-air'] },
-  { id: 'moonshot', name: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1',
-    models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
-  { id: 'volcengine', name: '火山方舟', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    models: ['doubao-1-5-lite-32k-250115', 'doubao-1-5-pro-32k-250115'] },
-  { id: 'custom', name: '自定义', baseUrl: '', models: [] },
+const FORMATS = [
+  { id: 'openai_chat', name: 'OpenAI Chat Completions 格式', supported: true },
+  { id: 'openai_responses', name: 'OpenAI Responses API 格式', supported: false },
+  { id: 'anthropic', name: 'Anthropic Messages 格式', supported: false },
 ];
 
-const CUSTOM = '__custom__';
-
 export default function ModelSettingsDialog({ onClose }: { onClose: () => void }) {
+  const [mode, setMode] = useState<'deepseek' | 'other'>('deepseek');
   const [cfg, setCfg] = useState<ModelConfig | null>(null);
-  const [providerId, setProviderId] = useState('discovery');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [model, setModel] = useState('');
-  const [customModel, setCustomModel] = useState('');
   const [keyDraft, setKeyDraft] = useState('');
-  const [showUrl, setShowUrl] = useState(false);
+  const [model, setModel] = useState(DEEPSEEK.models[0]);
+  const [format, setFormat] = useState('openai_chat');
+  const [baseUrl, setBaseUrl] = useState('');
+  const [fullUrl, setFullUrl] = useState(false);
+  const [modelId, setModelId] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [test, setTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number } | null>(null);
-
-  const provider = useMemo(
-    () => PROVIDERS.find((item) => item.id === providerId) ?? PROVIDERS[0],
-    [providerId],
-  );
 
   const load = useCallback(async () => {
     try {
       const value = await api.modelConfiguration();
       setCfg(value);
-      const saved = value.modelSlots?.fast ?? '';
-      const matched = PROVIDERS.find((item) => item.baseUrl && item.baseUrl === value.baseUrl);
-      setProviderId(matched ? matched.id : 'custom');
-      setBaseUrl(value.baseUrl ?? '');
-      if (matched && matched.models.includes(saved)) {
-        setModel(saved);
-        setCustomModel('');
-        setShowUrl(false);
+      const fast = value.modelSlots?.fast ?? '';
+      const isDeepSeek = (value.baseUrl ?? '') === DEEPSEEK.baseUrl;
+      setMode(isDeepSeek ? 'deepseek' : 'other');
+      if (isDeepSeek) {
+        setModel(DEEPSEEK.models.includes(fast) ? fast : DEEPSEEK.models[0]);
       } else {
-        setModel(CUSTOM);
-        setCustomModel(saved);
-        setShowUrl(!matched);
+        setBaseUrl(value.baseUrl ?? '');
+        setModelId(fast);
+        setDisplayName(localStorage.getItem('pitguard-model-name') || '');
       }
+      setKeyDraft('');
     } catch (reason) { setError(String(reason)); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
 
-  const chosenModel = model === CUSTOM ? customModel.trim() : model;
+  const reset = () => {
+    setKeyDraft(''); setError(''); setTest(null);
+    if (mode === 'deepseek') { setModel(DEEPSEEK.models[0]); }
+    else { setBaseUrl(''); setModelId(''); setDisplayName(''); setFormat('openai_chat'); setFullUrl(false); }
+  };
 
   const save = useCallback(async () => {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setTest(null);
     try {
+      let endpoint = baseUrl.trim();
+      if (fullUrl && endpoint.endsWith('/chat/completions')) {
+        endpoint = endpoint.slice(0, -'/chat/completions'.length);
+      }
+      const chosenModel = mode === 'deepseek' ? model : modelId.trim();
+      if (!chosenModel) throw new Error('请填写模型 ID');
+      if (mode === 'other' && !FORMATS.find((item) => item.id === format)?.supported) {
+        throw new Error('目前只支持 OpenAI Chat Completions 格式');
+      }
+      if (mode === 'other') localStorage.setItem('pitguard-model-name', displayName.trim());
       const payload: Record<string, string> = {
         ENABLE: cfg?.enabled ? '1' : '0',
-        BASE_URL: baseUrl.trim(),
+        BASE_URL: mode === 'deepseek' ? DEEPSEEK.baseUrl : endpoint,
         MODEL_FAST: chosenModel,
         MODEL_REASONING: chosenModel,
       };
@@ -83,9 +82,9 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
       const saved = await api.saveModelConfiguration(payload);
       setCfg(saved as unknown as ModelConfig);
       setKeyDraft('');
-    } catch (reason) { setError(String(reason)); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
-  }, [cfg, baseUrl, chosenModel, keyDraft]);
+  }, [mode, baseUrl, fullUrl, model, modelId, format, displayName, cfg, keyDraft]);
 
   const runTest = useCallback(async () => {
     setBusy(true); setError(''); setTest(null);
@@ -94,20 +93,7 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
     finally { setBusy(false); }
   }, []);
 
-  const pickProvider = (next: Provider) => {
-    setProviderId(next.id);
-    setTest(null);
-    if (next.baseUrl) {
-      setBaseUrl(next.baseUrl);
-      setModel(next.models[0] ?? CUSTOM);
-      setCustomModel('');
-      setShowUrl(false);
-    } else {
-      setBaseUrl('');
-      setModel(CUSTOM);
-      setShowUrl(true);
-    }
-  };
+  const unsupported = mode === 'other' && !FORMATS.find((item) => item.id === format)?.supported;
 
   return (
     <div className="msOverlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -122,16 +108,8 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
 
         <div className="msBody">
           <nav className="msProviders">
-            {PROVIDERS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={providerId === item.id ? 'on' : ''}
-                onClick={() => pickProvider(item)}
-              >
-                {item.name}
-              </button>
-            ))}
+            <button type="button" className={mode === 'deepseek' ? 'on' : ''} onClick={() => setMode('deepseek')}>DeepSeek</button>
+            <button type="button" className={mode === 'other' ? 'on' : ''} onClick={() => setMode('other')}>其他模型</button>
           </nav>
 
           <div className="msForm">
@@ -140,49 +118,86 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
               <em className={cfg?.configured ? 'msChip ok' : 'msChip'}>
                 {cfg?.configured ? `已配置 ${cfg.keyHint ?? ''}` : '未配置'}
               </em>
+              <em className="msHintText">当前：{cfg?.modelSlots?.fast || '未设置'}</em>
             </div>
 
-            <label className="msField">
-              <span>API Key</span>
-              <input type="password" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)}
-                placeholder={cfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
-            </label>
+            {mode === 'deepseek' ? (
+              <>
+                <label className="msField">
+                  <span>模型</span>
+                  <select value={model} onChange={(event) => setModel(event.target.value)}>
+                    <option value="deepseek-chat">deepseek-chat（对话）</option>
+                    <option value="deepseek-reasoner">deepseek-reasoner（推理）</option>
+                  </select>
+                </label>
+                <label className="msField">
+                  <span className="msReq">API 密钥</span>
+                  <input type="password" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)}
+                    placeholder={cfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
+                </label>
+                <div className="msField">
+                  <span>接口地址</span>
+                  <div className="msUrl"><code>api.deepseek.com/v1</code><em>官方默认</em></div>
+                </div>
+              </>
+            ) : (
+              <>
+                <label className="msField">
+                  <span className="msReq">API 格式</span>
+                  <select value={format} onChange={(event) => setFormat(event.target.value)}>
+                    {FORMATS.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}{item.supported ? '' : '（暂未接入）'}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-            <label className="msField">
-              <span>模型</span>
-              <select value={model} onChange={(event) => setModel(event.target.value)}>
-                {provider.models.map((name) => <option key={name} value={name}>{name}</option>)}
-                <option value={CUSTOM}>自定义模型名…</option>
-              </select>
-            </label>
+                <label className="msField">
+                  <span className="msReq">自定义请求地址</span>
+                  <div className="msFieldHead">
+                    <small>兼容 OpenAI 的服务端点，不要以斜杠结尾；/chat/completions 会自动补上</small>
+                    <label className="msSwitchMini">
+                      <input type="checkbox" checked={fullUrl} onChange={(event) => setFullUrl(event.target.checked)} />
+                      完整 URL
+                    </label>
+                  </div>
+                  <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)}
+                    placeholder="例如 https://api.openai.com/v1" />
+                </label>
 
-            {model === CUSTOM ? (
-              <label className="msField">
-                <span>模型 ID</span>
-                <input value={customModel} onChange={(event) => setCustomModel(event.target.value)}
-                  placeholder="服务商文档里的模型标识" />
-              </label>
-            ) : null}
+                <label className="msField">
+                  <span className="msReq">模型 ID</span>
+                  <input value={modelId} onChange={(event) => setModelId(event.target.value)} placeholder="输入模型 ID" />
+                </label>
 
-            <div className="msField">
-              <span>接口地址</span>
-              <div className="msUrl">
-                <code>{baseUrl.replace(/^https?:\/\//, '') || '未设置'}</code>
-                <button type="button" onClick={() => setShowUrl((prev) => !prev)}>
-                  {showUrl ? '收起' : '修改'}
+                <label className="msField">
+                  <span>模型展示名称</span>
+                  <div className="msFieldHead"><small>列表里显示的名字，不填就用模型 ID</small></div>
+                  <input value={displayName} maxLength={64} onChange={(event) => setDisplayName(event.target.value)}
+                    placeholder="请输入模型展示名称" />
+                </label>
+
+                <label className="msField">
+                  <span className="msReq">API 密钥</span>
+                  <input type="password" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)}
+                    placeholder={cfg?.configured ? '已保存，留空不改' : '请输入 API Key'} autoComplete="off" />
+                </label>
+
+                <button type="button" className="msAdvanced" onClick={() => setShowAdvanced((prev) => !prev)}>
+                  高级配置 <span>{showAdvanced ? '▾' : '▸'}</span>
                 </button>
-              </div>
-              {showUrl ? (
-                <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://…/v1" />
-              ) : null}
-            </div>
+                {showAdvanced ? (
+                  <label className="msSwitch">
+                    <input type="checkbox" checked={Boolean(cfg?.enabled)}
+                      onChange={(event) => setCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
+                    启用模型（仅参数理解、总控路由、扫描件识别；不参与数值与规范判定）
+                  </label>
+                ) : null}
+              </>
+            )}
 
-            <label className="msSwitch">
-              <input type="checkbox" checked={Boolean(cfg?.enabled)}
-                onChange={(event) => setCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
-              启用模型（仅参数理解、总控路由、扫描件识别；不参与数值与规范判定）
-            </label>
-
+            {unsupported ? <p className="msBad">目前只支持 OpenAI Chat Completions 格式</p> : null}
             {error ? <p className="msBad">{error}</p> : null}
             {test ? (
               <p className={test.ok ? 'msGood' : 'msBad'}>
@@ -193,8 +208,9 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
         </div>
 
         <footer className="msFoot">
-          <button type="button" className="msGhost" onClick={() => void runTest()} disabled={busy}>测试连接</button>
-          <button type="button" className="msPrimary" onClick={() => void save()} disabled={busy}>
+          <small className="msFootNote">连通性测试会发起一次真实请求，消耗少量 Token</small>
+          <button type="button" className="msGhost" onClick={reset} disabled={busy}>重置</button>
+          <button type="button" className="msPrimary" onClick={() => void save()} disabled={busy || unsupported}>
             {busy ? '保存中…' : '保存'}
           </button>
         </footer>
