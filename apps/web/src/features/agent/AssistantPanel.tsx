@@ -100,6 +100,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [apiHosts, setApiHosts] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState('');
   const [modelTier, setModelTier] = useState<'flash' | 'pro'>('flash');
+  const [customEndpoint, setCustomEndpoint] = useState(false);
   const [apiTest, setApiTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number; model?: string } | null>(null);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState('');
@@ -648,10 +649,21 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
                     onChange={(event) => setApiCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
                   启用（仅参数理解、路由、扫描件；不参与数值判定）
                 </label>
-                <label>接口地址（Base URL）
-                  <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
-                  <small className="agentFieldHint">模型服务的 /v1 根地址，换供应商才需要改</small>
-                </label>
+                <div className="agentEndpointRow">
+                  <span>接口</span>
+                  <div>
+                    <strong>{apiBaseUrl.replace(/^https?:\/\//, '').split('/')[0] || '未配置'}</strong>
+                    <button type="button" className="agentLinkBtn" onClick={() => setCustomEndpoint((prev) => !prev)}>
+                      {customEndpoint ? '收起' : '自定义'}
+                    </button>
+                  </div>
+                </div>
+                {customEndpoint ? (
+                  <label>接口地址（Base URL）
+                    <input value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder="https://…/v1" />
+                    <small className="agentFieldHint">换服务商时才需要改；域名会自动加入白名单</small>
+                  </label>
+                ) : null}
                 <div className="agentDockTier">
                   <span>模型</span>
                   <div className="agentTierCards">
