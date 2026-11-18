@@ -576,9 +576,8 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const roomLeft = ballLeft - 8;
   const panelWidth = Math.min(356, viewport.w - 40);
   const horizontal = roomRight >= panelWidth || roomRight >= roomLeft ? 'fromLeft' : 'fromRight';
-  const roomHeight = Math.max(320, Math.min(620, vertical === 'above' ? roomAbove : roomBelow));
-  // 没有消息时不撑满一屏，否则会被误认成输入框
-  const dockHeight = messages.length ? roomHeight : Math.min(roomHeight, 340);
+  // 空面板也保持和对话态一样高：面板就该有面板的样子
+  const dockHeight = Math.max(320, Math.min(620, vertical === 'above' ? roomAbove : roomBelow));
   const placement = `place-${vertical}-${horizontal}`;
 
   return (
