@@ -1,68 +1,83 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import './model-settings.css';
 
 type ModelConfig = {
   enabled: boolean; configured: boolean; keyHint?: string; source?: string;
-  baseUrl?: string; modelSlots?: Record<string, string>; allowedHosts?: string[];
+  baseUrl?: string; modelSlots?: Record<string, string>;
 };
 
-const PROVIDERS = [
-  { id: 'discovery', name: '内部网关（当前）', baseUrl: 'https://discovery-api.intern-ai.org.cn/v1',
-    fast: 'deepseek-v4.1-flash-1017', pro: 'deepseek-v4.1-flash-1017' },
+type Provider = { id: string; name: string; baseUrl: string; models: string[] };
+
+const PROVIDERS: Provider[] = [
+  { id: 'discovery', name: '内部网关', baseUrl: 'https://discovery-api.intern-ai.org.cn/v1',
+    models: ['deepseek-v4.1-flash-1017'] },
   { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1',
-    fast: 'deepseek-chat', pro: 'deepseek-reasoner' },
+    models: ['deepseek-chat', 'deepseek-reasoner'] },
   { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1',
-    fast: 'gpt-4o-mini', pro: 'gpt-4o' },
-  { id: 'dashscope', name: '通义千问（阿里云）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    fast: 'qwen-plus', pro: 'qwen-max' },
+    models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'] },
+  { id: 'dashscope', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen-plus', 'qwen-max', 'qwen-turbo'] },
   { id: 'zhipu', name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    fast: 'glm-4-flash', pro: 'glm-4-plus' },
-  { id: 'moonshot', name: 'Moonshot Kimi', baseUrl: 'https://api.moonshot.cn/v1',
-    fast: 'moonshot-v1-8k', pro: 'moonshot-v1-32k' },
-  { id: 'volcengine', name: '火山方舟（豆包）', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    fast: 'doubao-1-5-lite-32k-250115', pro: 'doubao-1-5-pro-32k-250115' },
-  { id: 'custom', name: '自定义', baseUrl: '', fast: '', pro: '' },
+    models: ['glm-4-flash', 'glm-4-plus', 'glm-4-air'] },
+  { id: 'moonshot', name: 'Moonshot', baseUrl: 'https://api.moonshot.cn/v1',
+    models: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'] },
+  { id: 'volcengine', name: '火山方舟', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+    models: ['doubao-1-5-lite-32k-250115', 'doubao-1-5-pro-32k-250115'] },
+  { id: 'custom', name: '自定义', baseUrl: '', models: [] },
 ];
+
+const CUSTOM = '__custom__';
 
 export default function ModelSettingsDialog({ onClose }: { onClose: () => void }) {
   const [cfg, setCfg] = useState<ModelConfig | null>(null);
   const [providerId, setProviderId] = useState('discovery');
   const [baseUrl, setBaseUrl] = useState('');
-  const [fast, setFast] = useState('');
-  const [pro, setPro] = useState('');
-  const [tier, setTier] = useState<'flash' | 'pro'>('flash');
+  const [model, setModel] = useState('');
+  const [customModel, setCustomModel] = useState('');
   const [keyDraft, setKeyDraft] = useState('');
-  const [custom, setCustom] = useState(false);
+  const [showUrl, setShowUrl] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [test, setTest] = useState<{ ok: boolean; reason?: string; latencyMs?: number } | null>(null);
+
+  const provider = useMemo(
+    () => PROVIDERS.find((item) => item.id === providerId) ?? PROVIDERS[0],
+    [providerId],
+  );
 
   const load = useCallback(async () => {
     try {
       const value = await api.modelConfiguration();
       setCfg(value);
-      setBaseUrl(value.baseUrl ?? '');
-      setFast(value.modelSlots?.fast ?? '');
-      setPro(value.modelSlots?.reasoning ?? value.modelSlots?.fast ?? '');
-      setTier(value.modelSlots?.fast && value.modelSlots?.fast === value.modelSlots?.reasoning ? 'pro' : 'flash');
+      const saved = value.modelSlots?.fast ?? '';
       const matched = PROVIDERS.find((item) => item.baseUrl && item.baseUrl === value.baseUrl);
       setProviderId(matched ? matched.id : 'custom');
-      setCustom(!matched);
+      setBaseUrl(value.baseUrl ?? '');
+      if (matched && matched.models.includes(saved)) {
+        setModel(saved);
+        setCustomModel('');
+        setShowUrl(false);
+      } else {
+        setModel(CUSTOM);
+        setCustomModel(saved);
+        setShowUrl(!matched);
+      }
     } catch (reason) { setError(String(reason)); }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
 
+  const chosenModel = model === CUSTOM ? customModel.trim() : model;
+
   const save = useCallback(async () => {
     setBusy(true); setError('');
     try {
-      const chosen = tier === 'pro' ? (pro || fast) : fast;
       const payload: Record<string, string> = {
         ENABLE: cfg?.enabled ? '1' : '0',
         BASE_URL: baseUrl.trim(),
-        MODEL_FAST: chosen.trim(),
-        MODEL_REASONING: chosen.trim(),
+        MODEL_FAST: chosenModel,
+        MODEL_REASONING: chosenModel,
       };
       if (keyDraft.trim()) payload.API_KEY = keyDraft.trim();
       const saved = await api.saveModelConfiguration(payload);
@@ -70,7 +85,7 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
       setKeyDraft('');
     } catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
-  }, [cfg, baseUrl, fast, pro, tier, keyDraft]);
+  }, [cfg, baseUrl, chosenModel, keyDraft]);
 
   const runTest = useCallback(async () => {
     setBusy(true); setError(''); setTest(null);
@@ -79,74 +94,109 @@ export default function ModelSettingsDialog({ onClose }: { onClose: () => void }
     finally { setBusy(false); }
   }, []);
 
+  const pickProvider = (next: Provider) => {
+    setProviderId(next.id);
+    setTest(null);
+    if (next.baseUrl) {
+      setBaseUrl(next.baseUrl);
+      setModel(next.models[0] ?? CUSTOM);
+      setCustomModel('');
+      setShowUrl(false);
+    } else {
+      setBaseUrl('');
+      setModel(CUSTOM);
+      setShowUrl(true);
+    }
+  };
+
   return (
-    <div className="modelSettingsOverlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section className="modelSettingsCard" aria-label="模型设置">
-        <header>
-          <div><strong>模型设置</strong><span>全局生效，所有项目共用同一套模型</span></div>
-          <button type="button" className="secondary" onClick={onClose}>关闭</button>
+    <div className="msOverlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="msPanel" aria-label="模型设置">
+        <header className="msHead">
+          <div>
+            <strong>模型设置</strong>
+            <span>全局生效：所有项目共用同一个模型</span>
+          </div>
+          <button type="button" className="msGhost" onClick={onClose}>关闭</button>
         </header>
 
-        <label className="msToggle">
-          <input type="checkbox" checked={Boolean(cfg?.enabled)}
-            onChange={(event) => setCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
-          启用（仅参数理解、总控路由、扫描件识别；不参与数值与规范判定）
-        </label>
+        <div className="msBody">
+          <nav className="msProviders">
+            {PROVIDERS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={providerId === item.id ? 'on' : ''}
+                onClick={() => pickProvider(item)}
+              >
+                {item.name}
+              </button>
+            ))}
+          </nav>
 
-        <label>服务商
-          <select value={providerId} onChange={(event) => {
-            const next = event.target.value;
-            setProviderId(next);
-            const preset = PROVIDERS.find((item) => item.id === next);
-            if (preset && preset.baseUrl) {
-              setBaseUrl(preset.baseUrl); setFast(preset.fast); setPro(preset.pro); setCustom(false);
-            } else { setCustom(true); }
-          }}>
-            {PROVIDERS.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-          <small className="msHint">{baseUrl.replace(/^https?:\/\//, '').split('/')[0] || '未配置地址'}</small>
-        </label>
+          <div className="msForm">
+            <div className="msRow">
+              <span>状态</span>
+              <em className={cfg?.configured ? 'msChip ok' : 'msChip'}>
+                {cfg?.configured ? `已配置 ${cfg.keyHint ?? ''}` : '未配置'}
+              </em>
+            </div>
 
-        {custom ? (
-          <>
-            <label>接口地址（Base URL）
-              <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://…/v1" />
+            <label className="msField">
+              <span>API Key</span>
+              <input type="password" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)}
+                placeholder={cfg?.configured ? '已保存，留空不改' : '粘贴 sk-…'} autoComplete="off" />
             </label>
-            <label>模型名（Flash）
-              <input value={fast} onChange={(event) => setFast(event.target.value)} />
-            </label>
-            <label>模型名（Pro）
-              <input value={pro} onChange={(event) => setPro(event.target.value)} />
-            </label>
-          </>
-        ) : null}
 
-        <label>API Key
-          <input type="password" value={keyDraft} onChange={(event) => setKeyDraft(event.target.value)}
-            placeholder={cfg?.configured ? `已保存 ${cfg.keyHint ?? ''}，留空不改` : '粘贴 sk-…'} autoComplete="off" />
-        </label>
+            <label className="msField">
+              <span>模型</span>
+              <select value={model} onChange={(event) => setModel(event.target.value)}>
+                {provider.models.map((name) => <option key={name} value={name}>{name}</option>)}
+                <option value={CUSTOM}>自定义模型名…</option>
+              </select>
+            </label>
 
-        <div className="msTier">
-          <span>模型</span>
-          <div>
-            <label className={tier === 'flash' ? 'on' : ''}>
-              <input type="radio" name="tier" checked={tier === 'flash'} onChange={() => setTier('flash')} />
-              <b>Flash</b><small>快 · 省</small>
+            {model === CUSTOM ? (
+              <label className="msField">
+                <span>模型 ID</span>
+                <input value={customModel} onChange={(event) => setCustomModel(event.target.value)}
+                  placeholder="服务商文档里的模型标识" />
+              </label>
+            ) : null}
+
+            <div className="msField">
+              <span>接口地址</span>
+              <div className="msUrl">
+                <code>{baseUrl.replace(/^https?:\/\//, '') || '未设置'}</code>
+                <button type="button" onClick={() => setShowUrl((prev) => !prev)}>
+                  {showUrl ? '收起' : '修改'}
+                </button>
+              </div>
+              {showUrl ? (
+                <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://…/v1" />
+              ) : null}
+            </div>
+
+            <label className="msSwitch">
+              <input type="checkbox" checked={Boolean(cfg?.enabled)}
+                onChange={(event) => setCfg((prev) => (prev ? { ...prev, enabled: event.target.checked } : prev))} />
+              启用模型（仅参数理解、总控路由、扫描件识别；不参与数值与规范判定）
             </label>
-            <label className={tier === 'pro' ? 'on' : ''}>
-              <input type="radio" name="tier" checked={tier === 'pro'} onChange={() => setTier('pro')} />
-              <b>Pro</b><small>更强 · 更慢</small>
-            </label>
+
+            {error ? <p className="msBad">{error}</p> : null}
+            {test ? (
+              <p className={test.ok ? 'msGood' : 'msBad'}>
+                {test.ok ? `连接正常 · ${test.latencyMs ?? '-'} ms` : `连接失败：${test.reason ?? ''}`}
+              </p>
+            ) : null}
           </div>
         </div>
-        <p className="msHint">{tier === 'pro' && (!pro || pro === fast) ? 'Pro 未单独配置，当前与 Flash 相同' : (tier === 'pro' ? pro : fast)}</p>
 
-        {error ? <p className="msError">{error}</p> : null}
-        {test ? <p className={test.ok ? 'msOk' : 'msError'}>{test.ok ? `连通正常 · ${test.latencyMs ?? '-'} ms` : `失败：${test.reason ?? ''}`}</p> : null}
-
-        <footer>
-          <button type="button" onClick={() => void save()} disabled={busy}>{busy ? '处理中…' : '保存'}</button>
-          <button type="button" className="secondary" onClick={() => void runTest()} disabled={busy}>测试连接</button>
+        <footer className="msFoot">
+          <button type="button" className="msGhost" onClick={() => void runTest()} disabled={busy}>测试连接</button>
+          <button type="button" className="msPrimary" onClick={() => void save()} disabled={busy}>
+            {busy ? '保存中…' : '保存'}
+          </button>
         </footer>
       </section>
     </div>
