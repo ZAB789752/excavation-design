@@ -620,9 +620,9 @@ def _emit_pile_row(
     wall: DiaphragmWallPanel,
     spec: dict,
     as_proxy: bool = False,
-    hoop_segments: int = 8,
-    hoop_ring_cap: int = 6,
-    strong_ring_cap: int = 5,
+    hoop_segments: int = 6,
+    hoop_ring_cap: int = 5,
+    strong_ring_cap: int = 4,
 ) -> tuple[list[int], list[int]]:
     """沿墙轴线布置排桩，并为每根桩生成圆形钢筋笼。"""
     path = list(getattr(getattr(wall, "axis", None), "points", []) or [])

@@ -823,6 +823,17 @@ export const api = {
   runIndustrialQualification: (projectId: string) => request<Record<string, unknown>>(`/api/projects/${projectId}/industrial/qualification`, { method: 'POST' }),
   runIndustrialClosure: (projectId: string) => request<IndustrialReadinessResult>(`/api/projects/${projectId}/industrial/closure`, { method: 'POST' }),
   getMonitoringControl: (projectId: string) => request<MonitoringControlResult>(`/api/projects/${projectId}/advanced/monitoring/control`),
+  generateBimModel: (projectId: string, profile: 'detailed' | 'visual' | 'light' = 'detailed') =>
+    request<{
+      profile: string; mode: string; description: string; filename: string; sizeMB: number;
+      downloadUrl: string; generatedAt: string; pileCount: number; rebarCount: number;
+      wallCount: number; beamCount: number; columnCount: number;
+      counts: Record<string, number>;
+      validation: { score?: number; status?: string; summary?: string };
+      notes: string[];
+    }>(`/api/projects/${projectId}/export/bim?profile=${profile}`, {
+      method: 'POST', timeoutMs: 300000, responseIdleTimeoutMs: 300000,
+      activity: { label: '正在生成 BIM 模型' } }),
   createTask: (projectId: string, operation: string, payload?: Record<string, unknown>) => request<PitTask>(`/api/projects/${projectId}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, payload: payload ?? {} }) }),
   createCandidateComparisonBatch: (projectId: string, topN = 3, useCache = true) => request<{ projectId: string; taskCount: number; tasks: PitTask[] }>(`/api/projects/${projectId}/tasks/candidate-comparison-batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topN, useCache }) }),
   getTask: (taskId: string) => request<PitTask>(`/api/tasks/${taskId}`, { timeoutMs: 10000, activity: { quiet: true, cacheTtlMs: 0 } }),

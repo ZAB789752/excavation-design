@@ -354,3 +354,85 @@ def export_coordinated_delivery(
     _record_export_manifest(project, "coordinatedDeliveryManifest", path, export_type=f"coordinated_delivery:{issue_mode}", metadata={"rebarMode": rebar_mode, "includeIfcProfiles": include_ifc_profiles})
     repo.save(project, action="export.coordinated_delivery_manifest", summary="Record coordinated delivery package manifest")
     return FileResponse(path=path, filename=path.name, media_type="application/zip")
+
+BIM_PROFILES = {
+    "detailed": ("design_detailed", "语义详细模型：真实 IfcReinforcingBar，桩/墙/支撑/梁全笼"),
+    "visual": ("construction_visual", "施工可视模型：同一几何用代理实体，兼容通用查看器"),
+    "light": ("coordination_light", "轻量协调模型：只保留构件与参数，不输出逐根钢筋"),
+}
+
+
+@router.post("/bim")
+def generate_bim_model(
+    project_id: str,
+    profile: Literal["detailed", "visual", "light"] = Query("detailed", description="BIM 模型档位"),
+    repo: ProjectRepository = Depends(get_repository),
+) -> dict:
+    """一键生成 BIM 模型：出 IFC、跑自检、返回可下载地址与模型清单。"""
+    if profile not in BIM_PROFILES:
+        raise HTTPException(status_code=400, detail=f"未知档位：{profile}")
+    mode, description = BIM_PROFILES[profile]
+    project = repo.require(project_id)
+
+    # 用计算版本而不是 updated_at：保存清单会刷新时间戳，导致缓存永远不命中
+    calc = project.calculation_results[-1] if project.calculation_results else None
+    design_version = getattr(calc, "id", "") if calc else ""
+    rebar_version = len(getattr(project.retaining_system, "diaphragm_walls", []) or []) if project.retaining_system else 0
+    signature = f"{project.id}|{design_version}|{rebar_version}|{mode}|bim-v1"
+    sidecar = EXPORT_DIR / f"{project_id}_{mode}.bim.json"
+    if sidecar.is_file():
+        try:
+            cached = json.loads(sidecar.read_text(encoding="utf-8"))
+            if cached.get("signature") == signature and Path(cached.get("path", "")).is_file():
+                summary_cached = dict(cached.get("summary") or {})
+                summary_cached["cached"] = True
+                return summary_cached
+        except Exception:
+            pass
+
+    path, check = _export_ifc_with_check(project, mode)
+    counts = dict(getattr(check, "entity_counts", {}) or {})
+    text_head = path.read_text(encoding="utf-8", errors="ignore")
+    if "IFCPILE" not in counts:
+        counts["IFCPILE"] = text_head.count("IFCPILE(")
+    del text_head
+    rebar = int(counts.get("IFCREINFORCINGBAR", 0) or 0)
+    piles = int(counts.get("IFCPILE", 0) or 0)
+    notes = [description]
+    if piles:
+        notes.append("计算按等代地下连续墙，BIM 按排桩表达；两者在构件属性中分别标注。")
+    if rebar:
+        notes.append("钢筋为圆截面并带材质色，可在 BIM 查看器中按构件筛选。")
+    summary = {
+        "profile": profile,
+        "mode": mode,
+        "description": description,
+        "filename": path.name,
+        "sizeMB": round(path.stat().st_size / 1048576, 2),
+        "downloadUrl": f"/api/projects/{project_id}/export/ifc?mode={mode}",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "counts": counts,
+        "pileCount": piles,
+        "rebarCount": rebar,
+        "wallCount": int(counts.get("IFCWALL", 0) or 0),
+        "beamCount": int(counts.get("IFCBEAM", 0) or 0),
+        "columnCount": int(counts.get("IFCCOLUMN", 0) or 0),
+        "validation": {
+            "score": getattr(check, "score", None),
+            "status": getattr(check, "status", None),
+            "summary": getattr(check, "summary", None),
+        },
+        "notes": notes,
+        "formalConstructionIssue": False,
+    }
+    summary["cached"] = False
+    _record_export_manifest(project, "bimGenerationManifest", path, export_type=f"bim:{profile}",
+                            metadata={"mode": mode, "rebarCount": rebar, "pileCount": piles,
+                                      "sizeMB": summary["sizeMB"]})
+    repo.save(project, action="export.bim_generate", summary=f"生成 BIM 模型（{profile}）")
+    try:
+        sidecar.write_text(json.dumps({"signature": signature, "path": str(path), "summary": summary},
+                                      ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    return summary

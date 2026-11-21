@@ -218,9 +218,9 @@ def test_pile_row_exports_circular_piles_and_cages() -> None:
         writer, owner=1, context=1, storey_place=0, wall=wall, spec=spec,
     )
 
-    # 9 m / 0.9 m 间距 → 11 根桩；每根 18 主筋 + 6 环×8 + 4 加强箍×8
+    # 9 m / 0.9 m 间距 → 11 根桩；每根 18 主筋 + 5 环×6 + 4 加强箍×6
     assert len(piles) == 11
-    assert len(bars) == 11 * (18 + 48 + 32)
+    assert len(bars) == 11 * (18 + 30 + 24)
     text = "\n".join(writer.lines)
     assert text.count("IFCPILE") == 11
     assert text.count("IFCCIRCLEPROFILEDEF") == 11 + len(bars)
