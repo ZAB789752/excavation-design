@@ -225,3 +225,23 @@ def test_pile_row_exports_circular_piles_and_cages() -> None:
     assert text.count("IFCPILE") == 11
     assert text.count("IFCCIRCLEPROFILEDEF") == 11 + len(bars)
     assert "IFCRECTANGLEPROFILEDEF" not in text
+
+
+def test_styled_items_are_not_reference_representation_items() -> None:
+    """IfcStyledItem 只能指向几何项，不能被 IfcShapeRepresentation 引用。
+
+    放错位置时，严格查看器（web-ifc / Revit）会整根跳过，钢筋全部不可见。
+    """
+    import re
+
+    writer = _writer_with_style()
+    _add(writer, vertical=True, refdir=(0, 0, 1), length=2.5)
+    text = "\n".join(writer.lines)
+
+    styled = set(re.findall(r"#(\d+)=IFCSTYLEDITEM", text))
+    assert styled
+    referenced: set[str] = set()
+    for line in writer.lines:
+        if "IFCSHAPEREPRESENTATION" in line:
+            referenced.update(re.findall(r"#(\d+)", line))
+    assert not (styled & referenced)

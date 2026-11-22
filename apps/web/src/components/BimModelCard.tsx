@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { api } from '../api/client';
 import './bim-model-card.css';
+
+const BimViewer = lazy(() => import('./BimViewer'));
 
 type Profile = 'detailed' | 'visual' | 'light';
 
@@ -32,6 +34,7 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<BimResult | null>(null);
+  const [preview, setPreview] = useState<'' | 'design_detailed' | 'coordination_light'>('');
 
   async function generate() {
     setBusy(true);
@@ -39,6 +42,7 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
     try {
       const data = await api.generateBimModel(projectId, profile);
       setResult(data as BimResult);
+      setPreview('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -100,6 +104,28 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
             <ul className="bimNotes">
               {result.notes.map((note) => <li key={note}>{note}</li>)}
             </ul>
+          ) : null}
+          <div className="bimPreviewBar">
+            <button
+              type="button"
+              className={preview === 'design_detailed' ? 'on' : ''}
+              onClick={() => setPreview(preview === 'design_detailed' ? '' : 'design_detailed')}
+            >
+              {preview === 'design_detailed' ? '收起三维预览' : '三维预览（含钢筋）'}
+            </button>
+            <button
+              type="button"
+              className={preview === 'coordination_light' ? 'on' : ''}
+              onClick={() => setPreview(preview === 'coordination_light' ? '' : 'coordination_light')}
+            >
+              {preview === 'coordination_light' ? '收起轻量预览' : '轻量预览（快）'}
+            </button>
+            <small>含钢筋的预览首次解析约 20–60 秒；轻量档位只出构件。</small>
+          </div>
+          {preview ? (
+            <Suspense fallback={<p className="bimHint">正在加载三维查看器…</p>}>
+              <BimViewer url={`${api.exportUrl(projectId, 'ifc')}?mode=${preview}`} height={440} />
+            </Suspense>
           ) : null}
         </div>
       ) : null}
