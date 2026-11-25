@@ -1,0 +1,97 @@
+.bimCard {
+  grid-column: 1 / -1;
+  background: #fff;
+  border: 1px solid #dbe3ec;
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: grid;
+  gap: 12px;
+}
+.corePanel > .bimCard { margin-top: 14px; }
+
+.bimQuantity {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px;
+  padding: 10px 12px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc;
+}
+.bimQuantity > div { display: grid; gap: 2px; min-width: 0; }
+.bimQuantity span { font-size: 11px; color: #64748b; }
+.bimQuantity strong { font-size: 15px; color: #0f172a; }
+.bimQuantity strong.ok { color: #047857; }
+.bimQuantity strong.warn { color: #b45309; }
+.bimQuantity em { font-style: normal; font-size: 11px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; }
+
+/* 工作区被助手面板挤到 460px 时，三维预览只剩 380px 宽，看不清整个基坑 */
+.bimPreviewFull {
+  position: fixed; inset: 12px; z-index: 9998;
+  padding: 10px; background: #fff; border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, .32);
+  display: flex; flex-direction: column;
+}
+.bimPreviewFull::before {
+  content: ''; position: fixed; inset: 0; z-index: -1;
+  background: rgba(15, 23, 42, .48);
+}
+.bimPreviewFull .bimViewer { flex: 1 1 auto; height: auto !important; min-height: 0; }
+.bimFullClose {
+  position: absolute; right: 18px; top: 18px; z-index: 2;
+  height: 30px; padding: 0 14px; border-radius: 8px; cursor: pointer;
+  border: 1px solid #dbe3ec; background: rgba(255, 255, 255, .95); color: #334155; font-size: 12px;
+}
+.bimFullClose:hover { background: #eff4f9; }
+.bimCardHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.bimCardHead h3 { margin: 0 0 4px; font-size: 15px; color: #1f3a5f; }
+.bimCardHead p { margin: 0; font-size: 12px; line-height: 1.6; color: #64748b; max-width: 640px; }
+.bimGenerate {
+  flex: 0 0 auto; height: 36px; padding: 0 20px; border-radius: 9px;
+  border: 1px solid #1d4ed8; background: #1d4ed8; color: #fff; font-size: 13px; cursor: pointer;
+}
+.bimGenerate:disabled { opacity: .55; cursor: default; }
+
+.bimProfiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.bimProfile {
+  text-align: left; border: 1px solid #dbe3ec; border-radius: 10px; background: #fff;
+  padding: 10px 12px; display: grid; gap: 3px; cursor: pointer; color: #334155;
+}
+.bimProfile strong { font-size: 13px; }
+.bimProfile span { font-size: 11px; color: #94a3b8; line-height: 1.4; }
+.bimProfile.on { border-color: #1d4ed8; background: #eff6ff; box-shadow: inset 0 0 0 1px #1d4ed8; }
+.bimProfile.on strong { color: #1d4ed8; }
+.bimProfile:disabled { opacity: .6; cursor: default; }
+
+.bimHint { margin: 0; font-size: 12px; color: #6b7c93; }
+.bimError { margin: 0; font-size: 12px; color: #b42318; }
+
+.bimResult { display: grid; gap: 10px; border-top: 1px dashed #e5eaf0; padding-top: 12px; }
+.bimStats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.bimStats > div {
+  background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px;
+  padding: 10px 12px; display: grid; gap: 2px;
+}
+.bimStats b { font-size: 18px; color: #1f3a5f; line-height: 1.1; }
+.bimStats span { font-size: 11px; color: #94a3b8; }
+
+.bimResultBar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bimBadge { font-size: 11.5px; padding: 3px 10px; border-radius: 999px; background: #f1f5f9; color: #64748b; }
+.bimBadge.ok { background: #e8f7ef; color: #1d7a4f; }
+.bimBadge.warn { background: #fef4e6; color: #b45309; }
+.bimResultBar code { font-size: 11.5px; color: #64748b; overflow: hidden; text-overflow: ellipsis; }
+.bimDownload {
+  margin-left: auto; height: 30px; padding: 0 14px; border-radius: 8px;
+  border: 1px solid #1d4ed8; background: #fff; color: #1d4ed8;
+  font-size: 12.5px; display: inline-flex; align-items: center; text-decoration: none;
+}
+.bimDownload:hover { background: #eff6ff; }
+.bimNotes { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.bimNotes li { font-size: 11.5px; color: #6b7c93; line-height: 1.5; }
+
+@media (max-width: 720px) {
+  .bimProfiles, .bimStats { grid-template-columns: 1fr 1fr; }
+}
+
+.bimPreviewBar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bimPreviewBar button {
+  height: 30px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; cursor: pointer;
+  border: 1px solid #dbe3ec; background: #fff; color: #334155;
+}
+.bimPreviewBar button.on { border-color: #1d4ed8; background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+.bimPreviewBar small { font-size: 11px; color: #94a3b8; }

@@ -786,6 +786,23 @@ export const api = {
   formalDrawingPackageUrl: (projectId: string, issueMode: 'review' | 'construction' = 'review', rebarMode: 'conservative' | 'balanced' | 'economic' = 'balanced') => `${API_BASE}/api/projects/${projectId}/export/formal-drawing-package?issue_mode=${issueMode}&rebar_mode=${rebarMode}`,
   coordinatedDeliveryPackageUrl: (projectId: string, issueMode: 'review' | 'construction' = 'review', rebarMode: 'conservative' | 'balanced' | 'economic' = 'balanced') => `${API_BASE}/api/projects/${projectId}/export/coordinated-delivery-package?issue_mode=${issueMode}&rebar_mode=${rebarMode}&include_ifc_profiles=true`,
   rebarDetailingPackageUrl: (projectId: string, mode: 'conservative' | 'balanced' | 'economic' = 'balanced') => `${API_BASE}/api/projects/${projectId}/export/rebar-detailing-package?mode=${mode}`,
+  generateBimModel: (projectId: string, profile: 'detailed' | 'visual' | 'light' = 'detailed') =>
+    request<{
+      profile: string; mode: string; description: string; filename: string; sizeMB: number;
+      downloadUrl: string; generatedAt: string; pileCount: number; rebarCount: number;
+      wallCount: number; beamCount: number; columnCount: number;
+      counts: Record<string, number>;
+      validation: { score?: number; status?: string; summary?: string };
+      rebarQuantity?: {
+        totalKg: number; totalT: number;
+        byType: Array<{ barType: string; diameterMm: number; count: number; lengthM: number; kg: number }>;
+        pile?: { count: number; ifcKg: number; theoryKg: number; diffPct: number; kgPerM?: number | null; basis: string };
+        supportLongitudinal?: { ifcKg: number; schemeKg: number; diffPct: number; status: string };
+      };
+      notes: string[];
+    }>(`/api/projects/${projectId}/export/bim?profile=${profile}`, {
+      method: 'POST', timeoutMs: 300000, responseIdleTimeoutMs: 300000,
+      activity: { label: '正在生成 BIM 模型' } }),
   getAssurance: (projectId: string) => request<AssuranceResult>(`/api/projects/${projectId}/assurance/gap-analysis`),
   getIndustrialReadiness: (projectId: string, includeDetailing = false, runQualification = false) => request<IndustrialReadinessResult>(`/api/projects/${projectId}/industrial/readiness?includeDetailing=${includeDetailing}&runQualification=${runQualification}`),
   runIndustrialQualification: (projectId: string) => request<Record<string, unknown>>(`/api/projects/${projectId}/industrial/qualification`, { method: 'POST' }),

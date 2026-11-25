@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
@@ -109,9 +110,9 @@ def evaluate_delivery_release_readiness(*args, **kwargs):
     return _lazy_call("app.services.delivery_release", "evaluate_delivery_release_readiness", *args, **kwargs)
 
 
-def _export_ifc_with_check(project, mode: str) -> tuple[Path, object]:
+def _export_ifc_with_check(project, mode: str, ledger: list | None = None) -> tuple[Path, object]:
     precheck = evaluate_ifc_model_compatibility(project)
-    path = export_simplified_ifc(project, EXPORT_DIR, export_mode=mode)
+    path = export_simplified_ifc(project, EXPORT_DIR, export_mode=mode, ledger=ledger)
     file_check = validate_ifc_file(path, base=precheck)
     sidecar = path.with_suffix(".ifc_check.json")
     sidecar.write_text(json.dumps(file_check.model_dump(mode="json", by_alias=True), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -354,3 +355,247 @@ def export_coordinated_delivery(
     _record_export_manifest(project, "coordinatedDeliveryManifest", path, export_type=f"coordinated_delivery:{issue_mode}", metadata={"rebarMode": rebar_mode, "includeIfcProfiles": include_ifc_profiles})
     repo.save(project, action="export.coordinated_delivery_manifest", summary="Record coordinated delivery package manifest")
     return FileResponse(path=path, filename=path.name, media_type="application/zip")
+
+BIM_PROFILES = {
+    "detailed": ("design_detailed", "语义详细模型：真实 IfcReinforcingBar，桩/墙/支撑/梁全笼"),
+    "visual": ("construction_visual", "施工可视模型：同一几何用代理实体，兼容通用查看器"),
+    "light": ("coordination_light", "轻量协调模型：只保留构件与参数，不输出逐根钢筋"),
+}
+
+
+STEEL_DENSITY_KG_M3 = 7850.0
+
+
+def _unit_weight_kg(diameter_mm: float) -> float:
+    d = max(float(diameter_mm or 0.0), 0.0) / 1000.0
+    return math.pi * d * d / 4.0 * STEEL_DENSITY_KG_M3
+
+
+def _bar_weight_kg(diameter_mm: float, length_m: float) -> float:
+    return _unit_weight_kg(diameter_mm) * max(float(length_m or 0.0), 0.0)
+
+
+def _pile_quantity_check(rows: list[dict], project) -> dict:
+    """用设计参数独立算一遍桩的钢筋量，和模型台账比。
+
+    这里校核的是「模型有没有如实表达设计参数」，不是「和 BBS 对量」——
+    BBS 要考虑搭接、锚固、损耗，是下一步的事。但只有这一步对上了，
+    模型里的吨位才值得拿去和别人的量比。
+    """
+    main = next((row for row in rows if row["barType"] == "pile_main"), None)
+    if not main:
+        return {}
+    advanced = getattr(project, "advanced_engineering", None) or {}
+    parsed = (advanced.get("calculationBookAutopilot") or {}).get("parsed") or {}
+    pile = parsed.get("pile") or {}
+    cage = parsed.get("pileCage") or {}
+    if not pile or not cage:
+        return {}
+    diameter = float(pile.get("diameter") or 0.0)
+    length = float(pile.get("length") or 0.0)
+    main_count = int(cage.get("providedBarCount") or cage.get("barCount") or 0)
+    main_d = float(cage.get("mainDiameterMm") or 0.0)
+    hoop_d = float(cage.get("hoopDiameterMm") or 0.0)
+    hoop_spacing = float(cage.get("hoopSpacingMm") or 0.0)
+    strong_d = float(cage.get("strongHoopDiameterMm") or 0.0)
+    strong_spacing = float(cage.get("strongHoopSpacingMm") or 2000.0)
+    cover = float(cage.get("clearCoverMm") or 50.0) / 1000.0
+    if min(diameter, length, main_count, main_d, hoop_d, hoop_spacing) <= 0:
+        return {}
+    pile_count = int(round(main["count"] / main_count)) if main_count else 0
+    if pile_count <= 0:
+        return {}
+
+    usable = max(length - 2 * cover, 0.2)
+    hoop_radius = max(diameter / 2.0 - cover - hoop_d / 1000.0 / 2.0, 0.05)
+    pitch = max(hoop_spacing / 1000.0, 0.05)
+    turns = usable / pitch
+    spiral_length = turns * math.hypot(2.0 * math.pi * hoop_radius, pitch)
+    strong_rings = max(1, min(int(length / max(strong_spacing / 1000.0, 0.5)) + 1, 4))
+
+    theory = {
+        "pile_main": pile_count * main_count * usable * _unit_weight_kg(main_d),
+        "pile_hoop_spiral": pile_count * spiral_length * _unit_weight_kg(hoop_d),
+        "pile_strong_hoop": pile_count * strong_rings * 2.0 * math.pi * hoop_radius * _unit_weight_kg(strong_d),
+    }
+    ifc = {
+        name: next((row["kg"] for row in rows if row["barType"] == name), 0.0)
+        for name in theory
+    }
+    theory_total = sum(theory.values())
+    ifc_total = sum(ifc.values())
+    if theory_total <= 0:
+        return {}
+    return {
+        "pile": {
+            "count": pile_count,
+            "ifcKg": round(ifc_total, 1),
+            "theoryKg": round(theory_total, 1),
+            "diffPct": round((ifc_total - theory_total) / theory_total * 100.0, 2),
+            "kgPerM": round(ifc_total / (pile_count * length), 1) if length > 0 else None,
+            "breakdown": [
+                {"item": name, "ifcKg": round(ifc[name], 1), "theoryKg": round(theory[name], 1)}
+                for name in ("pile_main", "pile_hoop_spiral", "pile_strong_hoop")
+            ],
+            "basis": "按设计参数独立核算（桩数 × 根数 × 定尺长度），不含搭接与损耗",
+        }
+    }
+
+
+def _scheme_summary(project) -> dict:
+    system = getattr(project, "retaining_system", None)
+    scheme = getattr(system, "rebar_design_scheme", None)
+    if scheme is None and isinstance(system, dict):
+        scheme = system.get("rebarDesignScheme")
+    if scheme is None:
+        return {}
+    summary = getattr(scheme, "summary", None)
+    if summary is None and isinstance(scheme, dict):
+        summary = scheme.get("summary")
+    return summary if isinstance(summary, dict) else {}
+
+
+def _design_quantity_compare(rows: list[dict], project) -> dict:
+    """和配筋方案里的纵筋重量指数对比。
+
+    这是唯一一处真正的外部参照：模型是从同一份设计参数长出来的，
+    如果它的纵筋吨位和配筋方案自己算的重量差得远，说明导出时丢了构件。
+    """
+    scheme = _scheme_summary(project)
+    scheme_kg = scheme.get("supportLongitudinalSteelWeightIndexKg")
+    if not scheme_kg:
+        return {}
+    ifc_kg = sum(row["kg"] for row in rows if row["barType"] == "longitudinal")
+    if ifc_kg <= 0:
+        return {}
+    diff = (ifc_kg - float(scheme_kg)) / float(scheme_kg) * 100.0
+    return {
+        "supportLongitudinal": {
+            "ifcKg": round(ifc_kg, 1),
+            "schemeKg": round(float(scheme_kg), 1),
+            "diffPct": round(diff, 2),
+            "status": "pass" if abs(diff) <= 5.0 else "review",
+        },
+        "basis": "与配筋方案 summary.supportLongitudinalSteelWeightIndexKg 对比，±5% 视为一致",
+    }
+
+
+def _rebar_quantity_summary(ledger: list, project) -> dict:
+    groups: dict[tuple[str, float], dict] = {}
+    for item in ledger or []:
+        diameter = float(item.get("diameterMm") or 0.0)
+        key = (str(item.get("barType") or "unknown"), diameter)
+        row = groups.get(key)
+        if row is None:
+            row = {"barType": key[0], "diameterMm": diameter, "count": 0, "lengthM": 0.0, "kg": 0.0}
+            groups[key] = row
+        row["count"] += 1
+        row["lengthM"] += float(item.get("lengthM") or 0.0)
+        row["kg"] += _bar_weight_kg(diameter, item.get("lengthM"))
+    rows = sorted(groups.values(), key=lambda item: -item["kg"])
+    total = sum(row["kg"] for row in rows)
+    for row in rows:
+        row["lengthM"] = round(row["lengthM"], 1)
+        row["kg"] = round(row["kg"], 1)
+    summary = {
+        "totalKg": round(total, 1),
+        "totalT": round(total / 1000.0, 2),
+        "byType": rows[:14],
+    }
+    summary.update(_pile_quantity_check(rows, project))
+    summary.update(_design_quantity_compare(rows, project))
+    return summary
+
+
+def _exporter_revision() -> str:
+    """导出器源码指纹。
+
+    缓存只按计算版本判断时，改了钢筋/几何导出逻辑但计算没变，会命中旧 sidecar，
+    出现“摘要写 36 MB、文件实际 38 MB”的不一致。把导出器源码纳入签名。
+    """
+    source = Path(__file__).resolve().parents[1] / "ifc" / "exporter.py"
+    try:
+        return hashlib.sha1(source.read_bytes()).hexdigest()[:10]
+    except OSError:
+        return "unknown"
+
+
+@router.post("/bim")
+def generate_bim_model(
+    project_id: str,
+    profile: Literal["detailed", "visual", "light"] = Query("detailed", description="BIM 模型档位"),
+    repo: ProjectRepository = Depends(get_repository),
+) -> dict:
+    """一键生成 BIM 模型：出 IFC、跑自检、返回可下载地址与模型清单。"""
+    if profile not in BIM_PROFILES:
+        raise HTTPException(status_code=400, detail=f"未知档位：{profile}")
+    mode, description = BIM_PROFILES[profile]
+    project = repo.require(project_id)
+
+    # 用计算版本而不是 updated_at：保存清单会刷新时间戳，导致缓存永远不命中
+    calc = project.calculation_results[-1] if project.calculation_results else None
+    design_version = getattr(calc, "id", "") if calc else ""
+    rebar_version = len(getattr(project.retaining_system, "diaphragm_walls", []) or []) if project.retaining_system else 0
+    signature = f"{project.id}|{design_version}|{rebar_version}|{mode}|bim-{_exporter_revision()}"
+    sidecar = EXPORT_DIR / f"{project_id}_{mode}.bim.json"
+    if sidecar.is_file():
+        try:
+            cached = json.loads(sidecar.read_text(encoding="utf-8"))
+            if cached.get("signature") == signature and Path(cached.get("path", "")).is_file():
+                summary_cached = dict(cached.get("summary") or {})
+                summary_cached["cached"] = True
+                return summary_cached
+        except Exception:
+            pass
+
+    ledger: list[dict] = []
+    path, check = _export_ifc_with_check(project, mode, ledger=ledger)
+    counts = dict(getattr(check, "entity_counts", {}) or {})
+    text_head = path.read_text(encoding="utf-8", errors="ignore")
+    if "IFCPILE" not in counts:
+        counts["IFCPILE"] = text_head.count("IFCPILE(")
+    del text_head
+    rebar = int(counts.get("IFCREINFORCINGBAR", 0) or 0)
+    piles = int(counts.get("IFCPILE", 0) or 0)
+    notes = [description]
+    if piles:
+        notes.append("计算按等代地下连续墙，BIM 按排桩表达；两者在构件属性中分别标注。")
+    if rebar:
+        notes.append("钢筋按主筋/箍筋/加强箍分色；查看器默认透视，可切换实体、透视与只看钢筋。")
+        notes.append("闭合箍筋按一道一个实体统计（不是四段直筋），因此钢筋根数按构件数计。")
+    if piles:
+        notes.append("桩箍筋为整根螺旋（IfcSweptDiskSolid），圈数按设计间距，不是示意抽样。")
+    summary = {
+        "profile": profile,
+        "mode": mode,
+        "description": description,
+        "filename": path.name,
+        "sizeMB": round(path.stat().st_size / 1048576, 2),
+        "downloadUrl": f"/api/projects/{project_id}/export/ifc?mode={mode}",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "counts": counts,
+        "pileCount": piles,
+        "rebarCount": rebar,
+        "wallCount": int(counts.get("IFCWALL", 0) or 0),
+        "beamCount": int(counts.get("IFCBEAM", 0) or 0),
+        "columnCount": int(counts.get("IFCCOLUMN", 0) or 0),
+        "validation": {
+            "score": getattr(check, "score", None),
+            "status": getattr(check, "status", None),
+            "summary": getattr(check, "summary", None),
+        },
+        "rebarQuantity": _rebar_quantity_summary(ledger, project),
+        "notes": notes,
+        "formalConstructionIssue": False,
+    }
+    summary["cached"] = False
+    _record_export_manifest(project, "bimGenerationManifest", path, export_type=f"bim:{profile}",
+                            metadata={"mode": mode, "rebarCount": rebar, "pileCount": piles,
+                                      "sizeMB": summary["sizeMB"]})
+    repo.save(project, action="export.bim_generate", summary=f"生成 BIM 模型（{profile}）")
+    try:
+        sidecar.write_text(json.dumps({"signature": signature, "path": str(path), "summary": summary},
+                                      ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+    return summary

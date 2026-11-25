@@ -17,6 +17,7 @@
     "three": "0.184.0",
     "typescript": "6.0.3",
     "vite": "8.1.0",
+    "web-ifc": "^0.0.80",
     "zustand": "5.0.14"
   },
   "devDependencies": {

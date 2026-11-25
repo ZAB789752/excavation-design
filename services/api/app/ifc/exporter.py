@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import math
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,9 @@ def _ifc_text(value: str) -> str:
     # IFC's \X2\hhhh\X0\ escape so Chinese names and notes do not break
     # visualization/import in stricter BIM viewers.
     value = str(value).replace("'", "''")
+    if value.isascii():
+        # 绝大多数属性名/编号是纯 ASCII，逐字符扫描在这里纯属浪费
+        return value
     out: list[str] = []
     run: list[str] = []
     def flush_run() -> None:
@@ -64,18 +68,24 @@ def _guid() -> str:
     stricter and expect a compressed 128-bit token.  This base64-style encoding
     keeps the file lightweight while improving viewer compatibility.
     """
-    value = uuid4().int
-    chars: list[str] = []
-    for _ in range(22):
-        value, rem = divmod(value, 64)
-        chars.append(_IFC_GUID_CHARS[rem])
-    return "".join(reversed(chars))
+    # 128 bit -> 24 base64 chars minus padding = 22, same as IFC's own alphabet
+    # after the +/ substitution.  A hand-written divmod loop cost ~1 ms per bar.
+    token = base64.b64encode(uuid4().bytes).decode("ascii").rstrip("=")
+    return token.replace("+", "_").replace("/", "$")
 
 
 class IfcWriter:
     def __init__(self) -> None:
         self.lines: list[str] = []
         self.next_id = 1
+        # 同一方向/原点被几万根钢筋重复引用。不缓存时 2.5 万根钢筋会写出
+        # 12 万个 IFCDIRECTION，文件体积有三分之一耗在这些重复实体上。
+        self._direction_cache: dict[tuple[float, float, float], int] = {}
+        self._placement_cache: dict[tuple[float, float, float], int] = {}
+        self._pset_cache: dict[tuple[str, tuple[tuple[str, str], ...]], int] = {}
+        self._local_placement_cache: dict[tuple, int] = {}
+        # 每根钢筋的实际直径与长度，导出后直接汇总成吨位台账
+        self.rebar_ledger: list[dict] = []
 
     def entity(self, value: str) -> int:
         eid = self.next_id
@@ -95,7 +105,13 @@ class IfcWriter:
             x, y, z = 1.0, 0.0, 0.0
         else:
             x, y, z = x / length, y / length, z / length
-        return self.entity(f"IFCDIRECTION(({_real(x)},{_real(y)},{_real(z)}))")
+        key = (round(x, 6), round(y, 6), round(z, 6))
+        cached = self._direction_cache.get(key)
+        if cached is not None:
+            return cached
+        eid = self.entity(f"IFCDIRECTION(({_real(x)},{_real(y)},{_real(z)}))")
+        self._direction_cache[key] = eid
+        return eid
 
     @staticmethod
     def _safe_refdir(refdir: tuple[float, float, float], axis: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -112,10 +128,17 @@ class IfcWriter:
         return refdir
 
     def axis2_3d(self, x: float, y: float, z: float, refdir: tuple[float, float, float] = (1, 0, 0), axis: tuple[float, float, float] = (0, 0, 1)) -> int:
+        # 扫掠实体的局部坐标系几乎都是原点 + 默认朝向，复用同一个实例
+        key = (round(x, 6), round(y, 6), round(z, 6), refdir, axis)
+        cached = self._placement_cache.get(key)
+        if cached is not None:
+            return cached
         p = self.point3(x, y, z)
         a = self.direction(*axis)
         r = self.direction(*self._safe_refdir(refdir, axis))
-        return self.entity(f"IFCAXIS2PLACEMENT3D(#{p},#{a},#{r})")
+        eid = self.entity(f"IFCAXIS2PLACEMENT3D(#{p},#{a},#{r})")
+        self._placement_cache[key] = eid
+        return eid
 
     def axis2_2d(self, x: float = 0.0, y: float = 0.0) -> int:
         p = self.point2(x, y)
@@ -134,7 +157,8 @@ class IfcWriter:
         rel = f"#{relative_to}" if relative_to else "$"
         return self.entity(f"IFCLOCALPLACEMENT({rel},#{placement_axis})")
 
-    def rect_swept_shape(self, context_id: int, length: float, width: float, height: float) -> int:
+    def rect_swept_shape(self, context_id: int, length: float, width: float, height: float,
+                         style_id: int | None = None) -> int:
         length = max(float(length), 0.001)
         width = max(float(width), 0.001)
         height = max(float(height), 0.001)
@@ -143,6 +167,113 @@ class IfcWriter:
         swept_pos = self.axis2_3d(0, 0, 0)
         extrusion_dir = self.direction(0, 0, 1)
         solid = self.entity(f"IFCEXTRUDEDAREASOLID(#{profile},#{swept_pos},#{extrusion_dir},{_real(height)})")
+        if style_id:
+            self.entity(f"IFCSTYLEDITEM(#{solid},(#{style_id}),$)")
+        rep = self.entity(f"IFCSHAPEREPRESENTATION(#{context_id},'Body','SweptSolid',(#{solid}))")
+        return self.entity(f"IFCPRODUCTDEFINITIONSHAPE($,$,(#{rep}))")
+
+    def circle_swept_shape(
+        self,
+        context_id: int,
+        radius: float,
+        length: float,
+        style_id: int | None = None,
+    ) -> int:
+        """Round bar: circular profile extruded along local +Z.
+
+        Reinforcement shown as rectangular prisms reads as square sticks in every
+        viewer, which is the main reason exported cages looked wrong.  A circular
+        profile extruded by the bar length keeps the same placement convention as
+        the previous box geometry (extrusion along local Z) but renders as a bar.
+        """
+        radius = max(float(radius), 0.003)
+        length = max(float(length), 0.001)
+        pos2d = self.axis2_2d(0, 0)
+        profile = self.entity(f"IFCCIRCLEPROFILEDEF(.AREA.,$,#{pos2d},{_real(radius)})")
+        swept_pos = self.axis2_3d(0, 0, 0)
+        extrusion_dir = self.direction(0, 0, 1)
+        solid = self.entity(f"IFCEXTRUDEDAREASOLID(#{profile},#{swept_pos},#{extrusion_dir},{_real(length)})")
+        if style_id:
+            # IfcStyledItem 必须独立指向几何项；放进 Items 会让 strict 查看器跳过整个表达
+            self.entity(f"IFCSTYLEDITEM(#{solid},(#{style_id}),$)")
+        rep = self.entity(f"IFCSHAPEREPRESENTATION(#{context_id},'Body','SweptSolid',(#{solid}))")
+        return self.entity(f"IFCPRODUCTDEFINITIONSHAPE($,$,(#{rep}))")
+
+    def surface_style(
+        self,
+        name: str,
+        red: float,
+        green: float,
+        blue: float,
+        transparency: float = 0.0,
+    ) -> int:
+        """Simple coloured surface style so rebar is distinguishable in viewers."""
+        colour = self.entity(f"IFCCOLOURRGB($,{_real(red)},{_real(green)},{_real(blue)})")
+        rendering = self.entity(
+            f"IFCSURFACESTYLERENDERING(#{colour},{_real(transparency)},$,$,$,$,$,$,.NOTDEFINED.)"
+        )
+        return self.entity(f"IFCSURFACESTYLE({_step_string(name)},.BOTH.,(#{rendering}))")
+
+    def hollow_rect_ring_shape(
+        self,
+        context_id: int,
+        width: float,
+        height: float,
+        wall: float,
+        depth: float,
+        style_id: int | None = None,
+    ) -> int:
+        """闭合矩形箍筋：一个空心矩形剖面沿构件轴挤出。
+
+        以前一道箍筋拆成上下左右四根直筋，一道占四个实体、四处接缝。
+        空心环一道只占一个实体，才能在同样体积下把间距画到设计值。
+        """
+        width = max(float(width), 0.04)
+        height = max(float(height), 0.04)
+        wall = min(max(float(wall), 0.004), min(width, height) / 3.0)
+        depth = max(float(depth), 0.004)
+
+        def rect_curve(w_value: float, h_value: float) -> int:
+            pts = [
+                (-w_value / 2, -h_value / 2), (w_value / 2, -h_value / 2),
+                (w_value / 2, h_value / 2), (-w_value / 2, h_value / 2),
+                (-w_value / 2, -h_value / 2),
+            ]
+            ids = [self.point2(x, y) for x, y in pts]
+            return self.entity("IFCPOLYLINE((" + ",".join(f"#{i}" for i in ids) + "))")
+
+        outer = rect_curve(width, height)
+        inner = rect_curve(max(width - 2 * wall, 0.01), max(height - 2 * wall, 0.01))
+        profile = self.entity(f"IFCARBITRARYPROFILEDEFWITHVOIDS(.AREA.,$,#{outer},(#{inner}))")
+        solid = self.entity(
+            f"IFCEXTRUDEDAREASOLID(#{profile},#{self.axis2_3d(0, 0, 0)},#{self.direction(0, 0, 1)},{_real(depth)})"
+        )
+        if style_id:
+            self.entity(f"IFCSTYLEDITEM(#{solid},(#{style_id}),$)")
+        rep = self.entity(f"IFCSHAPEREPRESENTATION(#{context_id},'Body','SweptSolid',(#{solid}))")
+        return self.entity(f"IFCPRODUCTDEFINITIONSHAPE($,$,(#{rep}))")
+
+    def hollow_circle_ring_shape(
+        self,
+        context_id: int,
+        radius: float,
+        wall: float,
+        depth: float,
+        style_id: int | None = None,
+    ) -> int:
+        """圆形加强箍：空心圆剖面沿桩轴挤出，代替八段折线拼出来的多边形。"""
+        radius = max(float(radius), 0.05)
+        wall = min(max(float(wall), 0.004), radius / 2.0)
+        depth = max(float(depth), 0.004)
+        pos2d = self.axis2_2d(0, 0)
+        profile = self.entity(
+            f"IFCCIRCLEHOLLOWPROFILEDEF(.AREA.,$,#{pos2d},{_real(radius)},{_real(wall)})"
+        )
+        solid = self.entity(
+            f"IFCEXTRUDEDAREASOLID(#{profile},#{self.axis2_3d(0, 0, 0)},#{self.direction(0, 0, 1)},{_real(depth)})"
+        )
+        if style_id:
+            self.entity(f"IFCSTYLEDITEM(#{solid},(#{style_id}),$)")
         rep = self.entity(f"IFCSHAPEREPRESENTATION(#{context_id},'Body','SweptSolid',(#{solid}))")
         return self.entity(f"IFCPRODUCTDEFINITIONSHAPE($,$,(#{rep}))")
 
@@ -158,8 +289,14 @@ class IfcWriter:
         return self.entity(f"IFCPROPERTYSINGLEVALUE({_step_string(name)},$, {nominal}, $)")
 
     def property_set(self, owner_id: int, element_id: int, name: str, props: dict) -> int:
-        prop_ids = [self.single_value(k, v) for k, v in props.items()]
-        pset = self.entity(f"IFCPROPERTYSET({_step_string(_guid())},#{owner_id},{_step_string(name)},$,(" + ",".join(f"#{pid}" for pid in prop_ids) + "))")
+        # 同规格钢筋的属性完全一致（如同一根桩的 18 根主筋）。复用 PSet 后
+        # 2.5 万份重复属性集可降到几百份，是文件瘦身的主要来源。
+        key = (name, tuple((str(k), repr(v)) for k, v in props.items()))
+        pset = self._pset_cache.get(key)
+        if pset is None:
+            prop_ids = [self.single_value(k, v) for k, v in props.items()]
+            pset = self.entity(f"IFCPROPERTYSET({_step_string(_guid())},#{owner_id},{_step_string(name)},$,(" + ",".join(f"#{pid}" for pid in prop_ids) + "))")
+            self._pset_cache[key] = pset
         self.entity(f"IFCRELDEFINESBYPROPERTIES({_step_string(_guid())},#{owner_id},$,$,(#{element_id}),#{pset})")
         return pset
 
@@ -220,15 +357,33 @@ def _add_reinforcing_bar(
     as_proxy: bool = False,
 ) -> int:
     diameter_m = max(diameter_mm / 1000.0, 0.006)
-    # IFC viewers are much more reliable when vertical bars are exported as
-    # true vertical swept solids and horizontal bars as long local-X solids.
+    radius_m = diameter_m / 2.0
+    bar_type = str(properties.get("BarType") or "")
+    style_id = getattr(w, "rebar_style_id", None)
+    # 先判 strong：pile_strong_hoop 同时含 hoop，顺序反了会把加强箍染成箍筋色
+    if any(token in bar_type for token in ("strong", "distribution")):
+        style_id = getattr(w, "rebar_strong_style_id", None) or style_id
+    elif any(token in bar_type for token in ("hoop", "stirrup", "tie")):
+        style_id = getattr(w, "rebar_hoop_style_id", None) or style_id
+    # Round bars: circular profile extruded along the bar axis.  Square prisms
+    # made every cage read as a stack of sticks in the viewer.
     if vertical:
         placement = w.local_placement(storey_place, x, y, z, refdir=(1, 0, 0), axis=(0, 0, 1))
-        shape = w.rect_swept_shape(context, diameter_m, diameter_m, max(length, diameter_m))
+        shape = w.circle_swept_shape(context, radius_m, max(length, diameter_m), style_id)
     else:
-        placement = w.local_placement(storey_place, x, y, z, refdir=refdir, axis=(0, 0, 1))
-        shape = w.rect_swept_shape(context, max(length, diameter_m), diameter_m, diameter_m)
+        # Local Z must follow the bar, so the reference direction is a
+        # perpendicular inside the horizontal plane.
+        rx, ry, rz = (float(refdir[0]), float(refdir[1]), float(refdir[2]))
+        px, py = -ry, rx
+        norm = math.sqrt(px * px + py * py)
+        if norm <= 1e-9:
+            px, py, norm = 1.0, 0.0, 1.0
+        perp = (px / norm, py / norm, 0.0)
+        placement = w.local_placement(storey_place, x, y, z, refdir=perp, axis=(rx, ry, rz))
+        shape = w.circle_swept_shape(context, radius_m, max(length, diameter_m), style_id)
     area = _bar_area_m2(diameter_mm)
+    w.rebar_ledger.append({"barType": bar_type or "unknown", "diameterMm": round(float(diameter_mm), 1),
+                           "lengthM": round(float(length), 4)})
     if as_proxy:
         # Several lightweight web/coordination viewers either skip
         # IfcReinforcingBar or spend excessive time tessellating it.  The
@@ -256,6 +411,620 @@ def _add_reinforcing_bar(
     w.property_set(owner, element, "Pset_ReinforcementGroup", properties)
     return element
 
+
+
+def _add_ring_reinforcing_bar(
+    w: IfcWriter,
+    *,
+    owner: int,
+    context: int,
+    storey_place: int,
+    name: str,
+    description: str,
+    x: float,
+    y: float,
+    z: float,
+    refdir: tuple[float, float, float],
+    axis: tuple[float, float, float],
+    diameter_mm: float,
+    grade: str,
+    properties: dict,
+    rect_size: tuple[float, float] | None = None,
+    circle_radius: float | None = None,
+    as_proxy: bool = False,
+) -> int:
+    """一道闭合箍筋 = 一个空心剖面挤出，代替四根直筋拼的矩形。"""
+    diameter_m = max(diameter_mm / 1000.0, 0.006)
+    bar_type = str(properties.get("BarType") or "")
+    style_id = getattr(w, "rebar_style_id", None)
+    if any(token in bar_type for token in ("strong", "distribution")):
+        style_id = getattr(w, "rebar_strong_style_id", None) or style_id
+    elif any(token in bar_type for token in ("hoop", "stirrup", "tie")):
+        style_id = getattr(w, "rebar_hoop_style_id", None) or style_id
+    placement = w.local_placement(storey_place, x, y, z, refdir=refdir, axis=axis)
+    if circle_radius:
+        shape = w.hollow_circle_ring_shape(context, circle_radius, diameter_m, diameter_m, style_id)
+        bar_length = 2.0 * math.pi * max(float(circle_radius), 0.05)
+    else:
+        width, height = rect_size or (0.4, 0.4)
+        shape = w.hollow_rect_ring_shape(context, width, height, diameter_m, diameter_m, style_id)
+        bar_length = 2.0 * (float(width) + float(height))
+    area = _bar_area_m2(diameter_mm)
+    w.rebar_ledger.append({"barType": bar_type or "unknown", "diameterMm": round(float(diameter_mm), 1),
+                           "lengthM": round(float(bar_length), 4)})
+    merged = dict(properties)
+    if as_proxy:
+        merged.update({
+            "IfcSemanticClass": "IfcReinforcingBar visual proxy",
+            "VisualProxyReason": "viewer_safe_construction_visual_export",
+            "NominalDiameter_m": round(diameter_m, 6),
+            "CrossSectionArea_m2": round(area, 8),
+            "SteelGrade": grade,
+        })
+        element = w.entity(
+            f"IFCBUILDINGELEMENTPROXY({_step_string(_guid())},#{owner},{_step_string(name)},{_step_string(description)},$,#{placement},#{shape},$,.USERDEFINED.)"
+        )
+        w.property_set(owner, element, "Pset_ReinforcementVisualProxy", merged)
+        return element
+    element = w.entity(
+        f"IFCREINFORCINGBAR({_step_string(_guid())},#{owner},{_step_string(name)},{_step_string(description)},$,#{placement},#{shape},$,{_step_string(grade)},{_real(diameter_m)},{_real(area)},{_real(bar_length)},.USERDEFINED.,.RIBBED.)"
+    )
+    w.property_set(owner, element, "Pset_ReinforcementGroup", merged)
+    return element
+
+
+def _add_spiral_reinforcing_bar(
+    w: IfcWriter,
+    *,
+    owner: int,
+    context: int,
+    storey_place: int,
+    name: str,
+    description: str,
+    center_x: float,
+    center_y: float,
+    z_start: float,
+    z_end: float,
+    helix_radius: float,
+    pitch: float,
+    diameter_mm: float,
+    grade: str,
+    properties: dict,
+    points_per_turn: int = 8,
+    as_proxy: bool = False,
+) -> int:
+    """一根连续螺旋箍筋（IfcSweptDiskSolid + IfcPolyline）。
+
+    排桩的螺旋箍 @120 在 7.6 m 桩长上要 63 圈。按每圈拆成 6 段直筋会得到
+    378 根构件/桩，只能靠抽样（原来只画 5 圈）压缩，视觉上完全不像钢筋笼。
+    用一根沿螺旋线扫掠的圆管表达，既保持真实的圈数与间距，又只占一个实体。
+    """
+    height = max(float(z_end) - float(z_start), 0.05)
+    pitch = max(float(pitch), 0.02)
+    turns = max(height / pitch, 1.0)
+    segments = max(16, int(round(turns * max(4, points_per_turn))))
+    diameter_m = max(diameter_mm / 1000.0, 0.006)
+    radius_m = diameter_m / 2.0
+    points: list[int] = []
+    for index in range(segments + 1):
+        t = index / segments
+        angle = 2.0 * math.pi * turns * t
+        points.append(w.point3(
+            center_x + helix_radius * math.cos(angle),
+            center_y + helix_radius * math.sin(angle),
+            z_start + height * t,
+        ))
+    curve = w.entity(f"IFCPOLYLINE(({','.join(f'#{item}' for item in points)}))")
+    solid = w.entity(f"IFCSWEPTDISKSOLID(#{curve},{_real(radius_m)},$,$,$)")
+    style_id = getattr(w, "rebar_hoop_style_id", None) or getattr(w, "rebar_style_id", None)
+    if style_id:
+        # 颜色挂在几何项上；放进 Items 会被 strict 查看器跳过整个表达
+        w.entity(f"IFCSTYLEDITEM(#{solid},(#{style_id}),$)")
+    rep = w.entity(f"IFCSHAPEREPRESENTATION(#{context},'Body','SweptSolid',(#{solid}))")
+    shape = w.entity(f"IFCPRODUCTDEFINITIONSHAPE($,$,(#{rep}))")
+    placement = w.local_placement(storey_place, 0.0, 0.0, 0.0, refdir=(1, 0, 0), axis=(0, 0, 1))
+    bar_length = turns * math.hypot(2.0 * math.pi * helix_radius, pitch)
+    area = _bar_area_m2(diameter_mm)
+    w.rebar_ledger.append({"barType": "pile_hoop_spiral", "diameterMm": round(float(diameter_mm), 1),
+                           "lengthM": round(float(bar_length), 4)})
+    merged = dict(properties)
+    merged.update({
+        "BarType": "pile_hoop_spiral",
+        "HoopTurns": round(turns, 1),
+        "Pitch_mm": round(pitch * 1000),
+        "BarLength_m": round(bar_length, 2),
+    })
+    if as_proxy:
+        merged.update({
+            "IfcSemanticClass": "IfcReinforcingBar visual proxy",
+            "VisualProxyReason": "viewer_safe_construction_visual_export",
+            "NominalDiameter_m": round(diameter_m, 6),
+            "CrossSectionArea_m2": round(area, 8),
+            "SteelGrade": grade,
+        })
+        element = w.entity(
+            f"IFCBUILDINGELEMENTPROXY({_step_string(_guid())},#{owner},{_step_string(name)},{_step_string(description)},$,#{placement},#{shape},$,.USERDEFINED.)"
+        )
+        w.property_set(owner, element, "Pset_ReinforcementVisualProxy", merged)
+        return element
+    element = w.entity(
+        f"IFCREINFORCINGBAR({_step_string(_guid())},#{owner},{_step_string(name)},{_step_string(description)},$,#{placement},#{shape},$,{_step_string(grade)},{_real(diameter_m)},{_real(area)},{_real(bar_length)},.USERDEFINED.,.RIBBED.)"
+    )
+    w.property_set(owner, element, "Pset_ReinforcementGroup", merged)
+    return element
+
+
+def _emit_wall_cage_bars(
+    w: IfcWriter,
+    *,
+    owner: int,
+    context: int,
+    storey_place: int,
+    wall: DiaphragmWallPanel,
+    panel: dict,
+    cage: dict,
+    max_per_panel: int = 320,
+    as_proxy: bool = False,
+) -> list[int]:
+    """Emit one construction panel's rebar cage as individual round bars.
+
+    The previous export wrote a single representative bar per reinforcement group,
+    so a 6 m panel showed one or two rods and read as an empty cage.  The cage
+    descriptor already carries face diameters/spacings, horizontal spacing and
+    tie spacing; this turns those parameters into real bar geometry.
+    """
+    start = cage.get("start") or {}
+    end = cage.get("end") or {}
+    sx, sy = float(start.get("x", 0.0)), float(start.get("y", 0.0))
+    ex, ey = float(end.get("x", 0.0)), float(end.get("y", 0.0))
+    dx, dy = ex - sx, ey - sy
+    length = math.hypot(dx, dy)
+    if length <= 1e-6:
+        return []
+    ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux
+    bottom = float(cage.get("bottomElevation", wall.bottom_elevation))
+    height = max(float(cage.get("heightM") or (wall.top_elevation - wall.bottom_elevation)), 0.3)
+    thickness = max(float(cage.get("thicknessM") or wall.thickness), 0.2)
+    cover = min(max(float(cage.get("coverM") or 0.05), 0.02), thickness / 2 - 0.02)
+    usable = max(length - 2 * cover, 0.3)
+    face_offset = max(thickness / 2 - cover, 0.02)
+    panel_code = str(panel.get("panelCode") or cage.get("panelCode") or "PANEL")
+    grade = wall.rebar_grade or "HRB400"
+    bars: list[int] = []
+
+    def emit(name: str, x: float, y: float, z: float, refdir: tuple[float, float, float],
+             bar_length: float, diameter_mm: float, vertical: bool, bar_type: str) -> None:
+        # 钢筋定尺 12 m。60 m 的墙水平筋如果写成一整根，BBS 直接算出无法加工
+        # 的 60 m 单根；按定尺对接分段后，每段可加工，几何仍然连续。
+        stock = 12.0
+        bar_length = max(bar_length, 0.05)
+        pieces = int(math.ceil(bar_length / stock)) if bar_length > stock * 1.05 else 1
+        piece_length = bar_length / pieces
+        for piece in range(pieces):
+            if len(bars) >= max_per_panel:
+                break
+            offset = piece * piece_length
+            bars.append(_add_reinforcing_bar(
+                w, owner=owner, context=context, storey_place=storey_place,
+                name=name if pieces == 1 else f"{name}-S{piece + 1}",
+                description=f"{bar_type} bar of construction panel {panel_code} cage",
+                x=x + refdir[0] * offset, y=y + refdir[1] * offset, z=z + refdir[2] * offset,
+                refdir=refdir, length=piece_length,
+                diameter_mm=diameter_mm, grade=grade,
+                properties={
+                    "HostElement": panel_code,
+                    "CalculationWallCode": wall.panel_code,
+                    "ConstructionPanelCode": panel_code,
+                    "BarType": bar_type,
+                    "Diameter_mm": diameter_mm,
+                    "RepresentationLevel": "full_cage_grid",
+                    "SegmentCount": pieces,
+                    "StockLength_m": stock if pieces > 1 else None,
+                },
+                vertical=vertical, as_proxy=as_proxy,
+            ))
+
+    # Vertical cage bars, both faces, at the design spacing.
+    for face in cage.get("faces") or []:
+        diameter = float(face.get("diameterMm") or 20.0)
+        spacing = max(float(face.get("spacingMm") or 200.0) / 1000.0, 0.05)
+        count = int(face.get("estimatedVerticalBarCount") or 0)
+        if count <= 0:
+            count = int(usable / spacing) + 1
+        count = max(2, min(count, 70))
+        side = 1.0 if str(face.get("face")) == "outer" else -1.0
+        for index in range(count):
+            ratio = index / (count - 1) if count > 1 else 0.0
+            along = cover + ratio * usable
+            emit(
+                f"RB-{panel_code}-V{index + 1}",
+                sx + ux * along + nx * side * face_offset,
+                sy + uy * along + ny * side * face_offset,
+                bottom, (0, 0, 1), height, diameter, True,
+                f"vertical_{face.get('face') or 'face'}",
+            )
+
+    # Horizontal cage bars, both faces.
+    horizontal = cage.get("horizontal") or {}
+    h_diameter = float(horizontal.get("diameterMm") or 16.0)
+    h_count = int(horizontal.get("estimatedBarCountPerFace") or 0)
+    if h_count <= 0:
+        h_spacing = max(float(horizontal.get("spacingMm") or 200.0) / 1000.0, 0.05)
+        h_count = int(height / h_spacing) + 1
+    h_count = max(2, min(h_count, 80))
+    for side in (1.0, -1.0):
+        for index in range(h_count):
+            z = bottom + (index + 0.5) * height / h_count
+            emit(
+                f"RB-{panel_code}-H{index + 1}{'O' if side > 0 else 'I'}",
+                sx + ux * cover + nx * side * face_offset,
+                sy + uy * cover + ny * side * face_offset,
+                z, (ux, uy, 0.0), usable, h_diameter, False,
+                "horizontal" if side > 0 else "horizontal_inner",
+            )
+
+    # Ties bridging the two faces.
+    ties = cage.get("ties") or {}
+    t_diameter = float(ties.get("diameterMm") or 12.0)
+    tie_spacing = max(float(ties.get("spacingMm") or 400.0) / 1000.0, 0.1)
+    tie_count = max(2, min(int(height / tie_spacing) + 1, 60))
+    tie_length = max(thickness - 2 * cover, 0.05)
+    for index in range(tie_count):
+        z = bottom + (index + 0.5) * height / tie_count
+        emit(
+            f"RB-{panel_code}-T{index + 1}",
+            sx + ux * (length / 2) - nx * (tie_length / 2),
+            sy + uy * (length / 2) - ny * (tie_length / 2),
+            z, (nx, ny, 0.0), tie_length, t_diameter, False, "tie",
+        )
+    return bars
+
+
+def _emit_support_cage_bars(
+    w: IfcWriter,
+    *,
+    owner: int,
+    context: int,
+    storey_place: int,
+    support: SupportElement,
+    max_per_support: int = 600,
+    as_proxy: bool = False,
+    stirrup_station_cap: int = 400,
+) -> list[int]:
+    """Emit a support strut cage: longitudinal bars, side bars and closed hoops.
+
+    Previously only the first two reinforcement groups were written, one bar each,
+    so a strut showed two rods and no stirrups at all.
+    """
+    from app.ifc.rebar_visualization import _support_longitudinal_offsets
+
+    dx = support.end.x - support.start.x
+    dy = support.end.y - support.start.y
+    span = math.hypot(dx, dy)
+    if span <= 1e-6:
+        return []
+    ux, uy = dx / span, dy / span
+    nx, ny = -uy, ux
+    width = max(float(support.section.width or 0.8), 0.3)
+    height = max(float(support.section.height or 0.8), 0.3)
+    z_center = float(support.elevation)
+    cover = 0.05
+    half_w = max(width / 2.0 - cover, 0.05)
+    half_h = max(height / 2.0 - cover, 0.05)
+    usable = max(span - 2 * cover, 0.2)
+    code = support.code
+    groups = list(support.reinforcement or [])
+    bars: list[int] = []
+
+    def emit(name: str, x: float, y: float, z: float, refdir: tuple[float, float, float],
+             bar_length: float, diameter: float, vertical: bool, bar_type: str, grade: str) -> None:
+        stock = 12.0
+        bar_length = max(bar_length, 0.05)
+        pieces = int(math.ceil(bar_length / stock)) if bar_length > stock * 1.05 else 1
+        piece_length = bar_length / pieces
+        for piece in range(pieces):
+            if len(bars) >= max_per_support:
+                break
+            offset = piece * piece_length
+            bars.append(_add_reinforcing_bar(
+                w, owner=owner, context=context, storey_place=storey_place,
+                name=name if pieces == 1 else f"{name}-S{piece + 1}",
+                description=f"{bar_type} bar of support {code}",
+                x=x + refdir[0] * offset, y=y + refdir[1] * offset, z=z + refdir[2] * offset,
+                refdir=refdir, length=piece_length,
+                diameter_mm=diameter, grade=grade,
+                properties={
+                    "HostElement": code,
+                    "BarType": bar_type,
+                    "Diameter_mm": diameter,
+                    "RepresentationLevel": "full_cage_grid",
+                    "SegmentCount": pieces,
+                    "StockLength_m": stock if pieces > 1 else None,
+                },
+                vertical=vertical, as_proxy=as_proxy,
+            ))
+
+    longitudinal = next((g for g in groups if g.bar_type == "longitudinal"), None)
+    if longitudinal:
+        offsets = _support_longitudinal_offsets(int(longitudinal.count or 8), width, height)
+        for index, (lateral, vertical) in enumerate(offsets, start=1):
+            emit(
+                f"RB-{code}-L{index}",
+                support.start.x + ux * cover + nx * lateral,
+                support.start.y + uy * cover + ny * lateral,
+                z_center + vertical, (ux, uy, 0.0), usable,
+                longitudinal.diameter, False, "longitudinal", longitudinal.grade,
+            )
+
+    for group in groups:
+        if group.bar_type != "distribution":
+            continue
+        spacing = max(float(group.spacing or 200.0) / 1000.0, 0.05)
+        rows = max(2, min(int(height / spacing) + 1, 10))
+        for side in (1.0, -1.0):
+            for index in range(rows):
+                z = z_center - half_h + (index / (rows - 1)) * 2 * half_h
+                emit(
+                    f"RB-{code}-D{index + 1}{'A' if side > 0 else 'B'}",
+                    support.start.x + ux * cover + nx * side * half_w,
+                    support.start.y + uy * cover + ny * side * half_w,
+                    z, (ux, uy, 0.0), usable,
+                    group.diameter, False, "distribution", group.grade,
+                )
+
+    stirrups = [g for g in groups if g.bar_type == "stirrup"]
+    if stirrups:
+        group = stirrups[-1]  # 跨中较疏的一档，端部加密由设计文件表达
+        spacing = max(float(group.spacing or 200.0) / 1000.0, 0.05)
+        stations = max(2, min(int(usable / spacing) + 1, stirrup_station_cap))
+        hoop_width = 2 * half_w
+        hoop_height = 2 * half_h
+        for index in range(stations):
+            if len(bars) >= max_per_support:
+                break
+            ratio = index / (stations - 1) if stations > 1 else 0.5
+            chainage = cover + ratio * usable
+            cx = support.start.x + ux * chainage
+            cy = support.start.y + uy * chainage
+            # 一道闭合箍筋一个空心环实体：同样体积下可以画到设计间距
+            bars.append(_add_ring_reinforcing_bar(
+                w, owner=owner, context=context, storey_place=storey_place,
+                name=f"RB-{code}-S{index + 1}",
+                description=f"Closed stirrup of support {code}",
+                x=cx, y=cy, z=z_center,
+                refdir=(nx, ny, 0.0), axis=(ux, uy, 0.0),
+                rect_size=(hoop_width, hoop_height),
+                diameter_mm=group.diameter, grade=group.grade,
+                properties={
+                    "HostElement": code,
+                    "BarType": "stirrup",
+                    "Diameter_mm": group.diameter,
+                    "RepresentationLevel": "full_closed_hoop",
+                },
+                as_proxy=as_proxy,
+            ))
+    return bars
+
+
+def _emit_beam_cage_bars(
+    w: IfcWriter,
+    *,
+    owner: int,
+    context: int,
+    storey_place: int,
+    beam,
+    max_per_beam: int = 560,
+    as_proxy: bool = False,
+) -> list[int]:
+    """Crown/wale beam cage: longitudinal bars plus closed stirrups.
+
+    Beams previously carried no reinforcement geometry at all, so the top beams
+    looked like plain concrete in the rebar model.
+    """
+    from types import SimpleNamespace
+
+    points = list(getattr(getattr(beam, "axis", None), "points", []) or [])
+    if len(points) < 2:
+        return []
+    start, end = points[0], points[-1]
+    width = max(float(beam.section.width or 0.8), 0.3)
+    height = max(float(beam.section.height or 0.8), 0.3)
+    groups = []
+    for group in beam.reinforcement or []:
+        if group.bar_type == "longitudinal" and not group.count:
+            spacing = max(float(group.spacing or 200.0) / 1000.0, 0.05)
+            perimeter = 2 * (width + height)
+            count = max(4, min(int(perimeter / spacing) + 1, 16))
+            groups.append(group.model_copy(update={"count": count}))
+        else:
+            groups.append(group)
+    adapter = SimpleNamespace(
+        code=beam.code,
+        start=SimpleNamespace(x=start.x, y=start.y),
+        end=SimpleNamespace(x=end.x, y=end.y),
+        section=SimpleNamespace(width=width, height=height),
+        elevation=float(beam.elevation),
+        reinforcement=groups,
+    )
+    return _emit_support_cage_bars(
+        w, owner=owner, context=context, storey_place=storey_place,
+        support=adapter, max_per_support=max_per_beam, as_proxy=as_proxy,
+        stirrup_station_cap=400,
+    )
+
+
+def _pile_row_spec(project: Project) -> dict | None:
+    """计算书给的是排桩（桩径/桩距/桩长）时，BIM 按排桩表达而不是等代墙。"""
+    advanced = project.advanced_engineering or {}
+    parsed = (advanced.get("calculationBookAutopilot") or {}).get("parsed") or {}
+    pile = parsed.get("pile") or {}
+    diameter = float(pile.get("diameter") or 0)
+    spacing = float(pile.get("spacing") or 0)
+    if diameter <= 0 or spacing <= 0:
+        return None
+    cage = parsed.get("pileCage") or {}
+    return {
+        "diameterM": diameter,
+        "spacingM": spacing,
+        "lengthM": float(pile.get("length") or 0) or None,
+        "mainDiameterMm": float(cage.get("mainDiameterMm") or 25.0),
+        "mainBarCount": int(cage.get("barCount") or 0) or None,
+        "barSpacingMm": float(cage.get("barSpacingMm") or 120.0),
+        "hoopDiameterMm": float(cage.get("hoopDiameterMm") or 8.0),
+        "hoopSpacingMm": float(cage.get("hoopSpacingMm") or 150.0),
+        "strongHoopDiameterMm": float(cage.get("strongHoopDiameterMm") or 14.0),
+        "strongHoopSpacingMm": float(cage.get("strongHoopSpacingMm") or 2000.0),
+        "coverM": float(cage.get("clearCoverMm") or 50.0) / 1000.0,
+    }
+
+
+def _emit_pile_row(
+    w: IfcWriter,
+    *,
+    owner: int,
+    context: int,
+    storey_place: int,
+    wall: DiaphragmWallPanel,
+    spec: dict,
+    crown_bottom: float | None = None,
+    as_proxy: bool = False,
+    hoop_segments: int = 8,
+    hoop_ring_cap: int = 5,
+    strong_ring_cap: int = 4,
+) -> tuple[list[int], list[int]]:
+    """沿墙轴线布置排桩，并为每根桩生成圆形钢筋笼。"""
+    path = list(getattr(getattr(wall, "axis", None), "points", []) or [])
+    if len(path) < 2:
+        return [], []
+    segments: list[tuple[float, float, float, float, float]] = []
+    total = 0.0
+    for left, right in zip(path[:-1], path[1:]):
+        dx, dy = right.x - left.x, right.y - left.y
+        seg = math.hypot(dx, dy)
+        if seg <= 1e-9:
+            continue
+        segments.append((left.x, left.y, dx / seg, dy / seg, seg))
+        total += seg
+    if total <= 1e-9:
+        return [], []
+
+    diameter = float(spec["diameterM"])
+    spacing = max(float(spec["spacingM"]), 0.3)
+    count = max(2, int(round(total / spacing)) + 1)
+    step = total / (count - 1)
+
+    def point_at(chainage: float) -> tuple[float, float, float, float]:
+        remaining = chainage
+        for sx, sy, ux, uy, seg in segments:
+            if remaining <= seg or seg is segments[-1][4]:
+                return sx + ux * remaining, sy + uy * remaining, ux, uy
+            remaining -= seg
+        sx, sy, ux, uy, seg = segments[-1]
+        return sx + ux * seg, sy + uy * seg, ux, uy
+
+    # 桩顶必须在冠梁底以下。原先直接取墙顶（±0.000），桩身会穿过 0.8 m 冠梁。
+    top = float(wall.top_elevation)
+    if crown_bottom is not None:
+        top = min(top, float(crown_bottom) - 0.05)
+    length = float(spec.get("lengthM") or (top - float(wall.bottom_elevation)))
+    length = max(length, 1.0)
+    bottom = top - length
+    cover = min(max(float(spec["coverM"]), 0.03), diameter / 4)
+    main_d = float(spec["mainDiameterMm"]) / 1000.0
+    hoop_d = float(spec["hoopDiameterMm"]) / 1000.0
+    main_count = int(spec.get("mainBarCount") or 0)
+    if main_count <= 0:
+        main_count = max(6, int(math.pi * max(diameter - 2 * cover, 0.1) / max(spec["barSpacingMm"] / 1000.0, 0.05)))
+    main_count = max(6, min(main_count, 32))
+    main_radius = max(diameter / 2 - cover - hoop_d - main_d / 2, 0.05)
+    hoop_radius = max(diameter / 2 - cover - hoop_d / 2, 0.05)
+    hoop_spacing = max(float(spec["hoopSpacingMm"]) / 1000.0, 0.1)
+    strong_spacing = max(float(spec.get("strongHoopSpacingMm") or 2000.0) / 1000.0, 0.5)
+    strong_d = float(spec.get("strongHoopDiameterMm") or 14.0) / 1000.0
+    strong_rings = max(1, min(int(length / strong_spacing) + 1, strong_ring_cap))
+    grade = "HRB400"
+    hoop_turns = max(1.0, (length - 2 * cover) / hoop_spacing)
+
+    pile_ids: list[int] = []
+    bar_ids: list[int] = []
+    for index in range(count):
+        cx, cy, ux, uy = point_at(min(index * step, total))
+        placement = w.local_placement(storey_place, cx, cy, bottom, refdir=(1, 0, 0), axis=(0, 0, 1))
+        shape = w.circle_swept_shape(context, diameter / 2.0, length)
+        pile = w.entity(
+            f"IFCPILE({_step_string(_guid())},#{owner},{_step_string(f'{wall.panel_code}-P{index + 1:03d}')},"
+            f"'Bored pile row generated from calculation book',$,#{placement},#{shape},$,.BORED.,.CAST_IN_SITU.)"
+        )
+        w.property_set(owner, pile, "Pset_PileRowDesign", {
+            "HostWallCode": wall.panel_code,
+            "PileDiameter_m": diameter,
+            "PileSpacing_m": round(step, 3),
+            "PileLength_m": round(length, 3),
+            "PileTopElevation": round(top, 3),
+            "PileBottomElevation": round(bottom, 3),
+            "PileTopBasis": (
+                f"冠梁底面 {crown_bottom:.3f} 下嵌 0.05 m" if crown_bottom is not None
+                else "墙顶（未找到冠梁，按连续墙顶取值）"
+            ),
+            "MainBar": f"{main_count}D{int(main_d * 1000)}",
+            "Hoop": f"D{int(hoop_d * 1000)}@{int(hoop_spacing * 1000)}",
+            "ClearCover_mm": round(cover * 1000),
+            "RepresentationNote": "计算按等代墙，BIM 按排桩；两者在 Pset 中分别标注",
+            "Source": "calculation_book.pile",
+        })
+        pile_ids.append(pile)
+
+        # 主筋：沿圆周均布
+        for k in range(main_count):
+            angle = 2 * math.pi * k / main_count
+            bx = cx + main_radius * math.cos(angle)
+            by = cy + main_radius * math.sin(angle)
+            bar_ids.append(_add_reinforcing_bar(
+                w, owner=owner, context=context, storey_place=storey_place,
+                name=f"RB-{wall.panel_code}-P{index + 1:03d}-M{k + 1}",
+                description="Pile main bar (circular cage)",
+                x=bx, y=by, z=bottom + cover, refdir=(0, 0, 1),
+                length=max(length - 2 * cover, 0.2),
+                diameter_mm=main_d * 1000, grade=grade,
+                properties={"HostElement": f"{wall.panel_code}-P{index + 1:03d}", "BarType": "pile_main",
+                            "Diameter_mm": main_d * 1000, "RepresentationLevel": "circular_cage"},
+                vertical=True, as_proxy=as_proxy,
+            ))
+
+        # 螺旋箍：整桩一根连续螺旋（真实的 @120 圈数），不再抽样成 5 道
+        bar_ids.append(_add_spiral_reinforcing_bar(
+            w, owner=owner, context=context, storey_place=storey_place,
+            name=f"RB-{wall.panel_code}-P{index + 1:03d}-HS",
+            description=f"Pile spiral hoop D{int(hoop_d * 1000)}@{int(hoop_spacing * 1000)}",
+            center_x=cx, center_y=cy,
+            z_start=bottom + cover, z_end=bottom + length - cover,
+            helix_radius=hoop_radius, pitch=hoop_spacing,
+            diameter_mm=hoop_d * 1000, grade="HPB300",
+            properties={"HostElement": f"{wall.panel_code}-P{index + 1:03d}",
+                        "Diameter_mm": hoop_d * 1000,
+                        "RepresentationLevel": "full_spiral"},
+            as_proxy=as_proxy,
+        ))
+
+        # 加强箍（吊装用），图中 φ14@2000：一道一个空心圆环，不再八段拼接
+        for r in range(strong_rings):
+            z = bottom + cover + (r + 0.5) * (length - 2 * cover) / strong_rings
+            bar_ids.append(_add_ring_reinforcing_bar(
+                w, owner=owner, context=context, storey_place=storey_place,
+                name=f"RB-{wall.panel_code}-P{index + 1:03d}-G{r + 1}",
+                description="Pile strong hoop (lifting cage)",
+                x=cx, y=cy, z=z,
+                refdir=(1.0, 0.0, 0.0), axis=(0.0, 0.0, 1.0),
+                circle_radius=hoop_radius,
+                diameter_mm=strong_d * 1000, grade="HRB400",
+                properties={"HostElement": f"{wall.panel_code}-P{index + 1:03d}",
+                            "BarType": "pile_strong_hoop",
+                            "Diameter_mm": strong_d * 1000,
+                            "RepresentationLevel": "full_closed_hoop"},
+                as_proxy=as_proxy,
+            ))
+    return pile_ids, bar_ids
 
 
 def _wall_construction_spans(project: Project, wall: DiaphragmWallPanel) -> list[dict]:
@@ -334,7 +1103,12 @@ def _wall_design_properties(project: Project, wall: DiaphragmWallPanel, *, panel
         })
     return properties
 
-def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode: str = "design_detailed") -> Path:
+def export_simplified_ifc(
+    project: Project,
+    output_dir: str | Path,
+    export_mode: str = "design_detailed",
+    ledger: list[dict] | None = None,
+) -> Path:
     """Write an IFC4 STEP model with geometry and property sets.
 
     IfcOpenShell is not required in the runtime; this writer creates a compact IFC4 model with swept
@@ -357,6 +1131,9 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
     path = out_dir / f"{project.id}_{mode}.ifc"
     timestamp = datetime.now(timezone.utc).isoformat()
     w = IfcWriter()
+    if ledger is not None:
+        # 调用方拿这根 list 就能汇总吨位，不必再解析 20 MB 文件
+        w.rebar_ledger = ledger
 
     person = w.entity("IFCPERSON($,$,'PitGuard',$,$,$,$,$)")
     org = w.entity("IFCORGANIZATION($,'PitGuard BIM Designer',$,$,$)")
@@ -386,6 +1163,11 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
     material_concrete = w.entity("IFCMATERIAL('Concrete',$,$)")
     material_rebar = w.entity("IFCMATERIAL('Reinforcement steel',$,$)")
     material_steel = w.entity("IFCMATERIAL('Structural steel',$,$)")
+    # 三种钢筋各自配色：主筋红褐、箍筋青蓝、加强箍金黄。单一颜色时
+    # 一笼钢筋糊成一片，分不出主筋与箍筋。
+    w.rebar_style_id = w.surface_style("Rebar main", 0.72, 0.26, 0.20)
+    w.rebar_hoop_style_id = w.surface_style("Rebar hoop", 0.05, 0.45, 0.58)
+    w.rebar_strong_style_id = w.surface_style("Rebar strong hoop", 0.85, 0.60, 0.10)
 
     product_ids: list[int] = []
     concrete_product_ids: list[int] = []
@@ -394,6 +1176,20 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
 
     support_quality = evaluate_support_layout_quality(project) if project.retaining_system else None
     support_metrics = dict(support_quality.metrics or {}) if support_quality else {}
+    # Cage descriptors (face diameters, spacings, ties) come from the same
+    # visualization builder used by the dedicated rebar export.
+    cage_by_panel: dict[str, dict] = {}
+    if detailed_mode and project.retaining_system:
+        try:
+            from app.ifc.rebar_visualization import build_rebar_ifc_visualization
+
+            visualization = build_rebar_ifc_visualization(project, max_bars=400)
+            for cage in visualization.get("cages") or []:
+                code = str(cage.get("panelCode") or "")
+                if code:
+                    cage_by_panel[code] = cage
+        except Exception:
+            cage_by_panel = {}
     latest_calculation = project.calculation_results[-1] if project.calculation_results else None
     calculation_assurance = dict(getattr(latest_calculation, "calculation_assurance", {}) or {}) if latest_calculation else {}
     w.property_set(owner, project_entity, "Pset_PitGuardExportControl", {
@@ -415,6 +1211,10 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
         "CalculationResultHash": getattr(latest_calculation, "result_hash", None),
         "CalculationAssuranceStatus": calculation_assurance.get("status"),
         "ProfessionalReviewRequired": True,
+        "RebarRepresentationNote": (
+            "桩箍筋为完整螺旋（IfcSweptDiskSolid），支撑与梁箍筋按设计间距逐道闭合环表达；"
+            "墙竖向筋按每面最多 70 根抽样，钢筋总数量以计算书与 BBS 为准。"
+        ),
     })
 
     object_manifest: dict = {
@@ -449,6 +1249,13 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
     }
 
     if project.retaining_system:
+        pile_row_spec = _pile_row_spec(project)
+        # 桩顶落在冠梁底面，再嵌入 50 mm
+        crown_bottoms = [
+            float(beam.elevation) - float(beam.section.height or 0.0) / 2.0
+            for beam in (getattr(project.retaining_system, "crown_beams", None) or [])
+        ]
+        crown_bottom = min(crown_bottoms) if crown_bottoms else None
         for wall in project.retaining_system.diaphragm_walls:
             if len(wall.axis.points) < 2:
                 continue
@@ -473,6 +1280,39 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
                     "ConstructionPanelCount": len(spans),
                     "AssemblySemantics": "calculation_wall_parent_with_constructible_panel_children",
                 })
+            if detailed_mode and pile_row_spec:
+                pile_ids, pile_bar_ids = _emit_pile_row(
+                    w, owner=owner, context=context, storey_place=storey_place,
+                    wall=wall, spec=pile_row_spec, crown_bottom=crown_bottom,
+                    as_proxy=construction_visual_mode,
+                )
+                product_ids.extend(pile_ids)
+                product_ids.extend(pile_bar_ids)
+                rebar_product_ids.extend(pile_bar_ids)
+                child_elements.extend(pile_ids)
+                if assembly:
+                    w.property_set(owner, assembly, "Pset_PileRowSummary", {
+                        "PileCount": len(pile_ids),
+                        "PileDiameter_m": pile_row_spec["diameterM"],
+                        "PileSpacing_m": round(pile_row_spec["spacingM"], 3),
+                        "PileLength_m": pile_row_spec.get("lengthM"),
+                        "BarsPerPile": len(pile_bar_ids) // max(len(pile_ids), 1),
+                        "CalculationModel": "equivalent diaphragm wall (internal calculation only)",
+                        "BimModel": "bored pile row with circular cage",
+                    })
+                    if child_elements:
+                        w.entity(
+                            f"IFCRELAGGREGATES({_step_string(_guid())},#{owner},'Piles of calculation wall',$,#{assembly},("
+                            + ",".join(f"#{eid}" for eid in child_elements) + "))"
+                        )
+                object_manifest.setdefault("pileRows", []).append({
+                    "calculationWallCode": wall.panel_code,
+                    "pileCount": len(pile_ids),
+                    "barCount": len(pile_bar_ids),
+                    "diameterM": pile_row_spec["diameterM"],
+                    "spacingM": round(pile_row_spec["spacingM"], 3),
+                })
+                continue
             export_spans = spans if detailed_mode else [{
                 "panelIndex": 1, "panelCode": wall.panel_code, "startChainageM": 0.0,
                 "endChainageM": _line_direction(wall.axis.points[0], wall.axis.points[-1])[2],
@@ -514,34 +1354,52 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
                 })
                 if detailed_mode:
                     panel_rebar_ids: list[int] = []
-                    for idx, group in enumerate(wall.reinforcement, start=1):
-                        offset = (idx - (len(wall.reinforcement) + 1) / 2.0) * max(wall.thickness / max(len(wall.reinforcement), 2), 0.05)
-                        bar = _add_reinforcing_bar(
+                    cage = cage_by_panel.get(str(panel.get("panelCode")))
+                    if cage:
+                        # Full cage: vertical bars on both faces, horizontal bars
+                        # and ties at the design spacing.
+                        panel_rebar_ids = _emit_wall_cage_bars(
                             w, owner=owner, context=context, storey_place=storey_place,
-                            name=f"RB-{panel['panelCode']}-{idx}",
-                            description=f"Representative reinforcement group for construction panel: {group.name}",
-                            x=mx - uy * offset, y=my + ux * offset, z=wall.bottom_elevation,
-                            refdir=(0, 0, 1), length=height, diameter_mm=group.diameter, grade=group.grade,
-                            properties={
-                                "HostElement": panel["panelCode"], "CalculationWallCode": wall.panel_code,
-                                "ConstructionPanelCode": panel["panelCode"], "GroupName": group.name,
-                                "BarType": group.bar_type, "Diameter_mm": group.diameter,
-                                "Spacing_mm": group.spacing, "Count": group.count,
-                                "AreaPerMeter_mm2_per_m": group.area_per_meter,
-                                "RequiredAreaPerMeter_mm2_per_m": group.required_area_per_meter,
-                                "LocationDescription": group.location_description,
-                                "RepresentationLevel": "representative_group_bar_per_construction_panel",
-                            }, vertical=True, as_proxy=construction_visual_mode,
+                            wall=wall, panel=panel, cage=cage,
+                            as_proxy=construction_visual_mode,
                         )
-                        product_ids.append(bar)
-                        rebar_product_ids.append(bar)
-                        panel_rebar_ids.append(bar)
+                        product_ids.extend(panel_rebar_ids)
+                        rebar_product_ids.extend(panel_rebar_ids)
                         object_manifest["reinforcementGroups"].append({
                             "hostPanelCode": panel["panelCode"], "calculationWallCode": wall.panel_code,
-                            "groupId": group.id, "groupName": group.name, "barType": group.bar_type,
-                            "diameterMm": group.diameter, "spacingMm": group.spacing,
-                            "ifcEntityId": bar,
+                            "representation": "full_cage_grid",
+                            "barCount": len(panel_rebar_ids),
+                            "ifcEntityIds": panel_rebar_ids,
                         })
+                    else:
+                        for idx, group in enumerate(wall.reinforcement, start=1):
+                            offset = (idx - (len(wall.reinforcement) + 1) / 2.0) * max(wall.thickness / max(len(wall.reinforcement), 2), 0.05)
+                            bar = _add_reinforcing_bar(
+                                w, owner=owner, context=context, storey_place=storey_place,
+                                name=f"RB-{panel['panelCode']}-{idx}",
+                                description=f"Representative reinforcement group for construction panel: {group.name}",
+                                x=mx - uy * offset, y=my + ux * offset, z=wall.bottom_elevation,
+                                refdir=(0, 0, 1), length=height, diameter_mm=group.diameter, grade=group.grade,
+                                properties={
+                                    "HostElement": panel["panelCode"], "CalculationWallCode": wall.panel_code,
+                                    "ConstructionPanelCode": panel["panelCode"], "GroupName": group.name,
+                                    "BarType": group.bar_type, "Diameter_mm": group.diameter,
+                                    "Spacing_mm": group.spacing, "Count": group.count,
+                                    "AreaPerMeter_mm2_per_m": group.area_per_meter,
+                                    "RequiredAreaPerMeter_mm2_per_m": group.required_area_per_meter,
+                                    "LocationDescription": group.location_description,
+                                    "RepresentationLevel": "representative_group_bar_per_construction_panel",
+                                }, vertical=True, as_proxy=construction_visual_mode,
+                            )
+                            product_ids.append(bar)
+                            rebar_product_ids.append(bar)
+                            panel_rebar_ids.append(bar)
+                            object_manifest["reinforcementGroups"].append({
+                                "hostPanelCode": panel["panelCode"], "calculationWallCode": wall.panel_code,
+                                "groupId": group.id, "groupName": group.name, "barType": group.bar_type,
+                                "diameterMm": group.diameter, "spacingMm": group.spacing,
+                                "ifcEntityId": bar,
+                            })
                     if panel_rebar_ids:
                         cage_group = w.entity(
                             f"IFCGROUP({_step_string(_guid())},#{owner},{_step_string('CAGE-' + str(panel['panelCode']))},"
@@ -618,6 +1476,18 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
                 "NodeRebarCoordination": getattr(getattr(beam, "design_result", None), "node_additional_reinforcement_note", None),
                 "CheckStatus": getattr(getattr(beam, "design_result", None), "check_status", None),
             })
+            if detailed_mode:
+                beam_bars = _emit_beam_cage_bars(
+                    w, owner=owner, context=context, storey_place=storey_place,
+                    beam=beam, as_proxy=construction_visual_mode,
+                )
+                product_ids.extend(beam_bars)
+                rebar_product_ids.extend(beam_bars)
+                object_manifest.setdefault("beamCages", []).append({
+                    "beamCode": beam.code,
+                    "barCount": len(beam_bars),
+                    "representation": "full_cage_grid",
+                })
         for support in project.retaining_system.supports:
             ux, uy, length, _ = _line_direction(support.start, support.end)
             width = support.section.width or 0.8
@@ -670,36 +1540,17 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
                 "ifcEntityId": element,
             })
             if detailed_mode:
-                for idx, group in enumerate(support.reinforcement[:2], start=1):
-                    offset = (idx - 1.5) * max(width / 3.0, 0.10)
-                    bar = _add_reinforcing_bar(
-                        w,
-                        owner=owner,
-                        context=context,
-                        storey_place=storey_place,
-                        name=f"RB-{support.code}-{idx}",
-                        description=f"Representative support reinforcement group: {group.name}",
-                        x=mx - uy * offset,
-                        y=my + ux * offset,
-                        z=support.elevation - height / 2.0,
-                        refdir=(ux, uy, 0),
-                        length=length,
-                        diameter_mm=group.diameter,
-                        grade=group.grade,
-                        properties={
-                            "HostElement": support.code,
-                            "GroupName": group.name,
-                            "BarType": group.bar_type,
-                            "Diameter_mm": group.diameter,
-                            "Spacing_mm": group.spacing,
-                            "Count": group.count,
-                            "LocationDescription": group.location_description,
-                            "RepresentationLevel": "representative_group_bar",
-                        },
-                        as_proxy=construction_visual_mode,
-                    )
-                    product_ids.append(bar)
-                    rebar_product_ids.append(bar)
+                support_bars = _emit_support_cage_bars(
+                    w, owner=owner, context=context, storey_place=storey_place,
+                    support=support, as_proxy=construction_visual_mode,
+                )
+                product_ids.extend(support_bars)
+                rebar_product_ids.extend(support_bars)
+                object_manifest.setdefault("supportCages", []).append({
+                    "supportCode": support.code,
+                    "barCount": len(support_bars),
+                    "representation": "full_cage_grid",
+                })
         for column in project.retaining_system.columns:
             width = column.section.width or 0.6
             depth = column.section.height or width
@@ -888,7 +1739,10 @@ def export_simplified_ifc(project: Project, output_dir: str | Path, export_mode:
     if steel_product_ids:
         w.entity(f"IFCRELASSOCIATESMATERIAL({_step_string(_guid())},#{owner},'Steel material association',$,(" + ",".join(f"#{pid}" for pid in steel_product_ids) + f"),#{material_steel})")
     if rebar_product_ids:
-        w.entity(f"IFCRELASSOCIATESMATERIAL({_step_string(_guid())},#{owner},'Rebar material association',$,(" + ",".join(f"#{pid}" for pid in rebar_product_ids) + f"),#{material_rebar})")
+        # 一个 IFCRELASSOCIATESMATERIAL 挂两万个构件时，Revit/Navisworks 解析会明显变慢
+        for offset in range(0, len(rebar_product_ids), 2000):
+            chunk = rebar_product_ids[offset:offset + 2000]
+            w.entity(f"IFCRELASSOCIATESMATERIAL({_step_string(_guid())},#{owner},'Rebar material association',$,(" + ",".join(f"#{pid}" for pid in chunk) + f"),#{material_rebar})")
 
     header = [
         "ISO-10303-21;",
