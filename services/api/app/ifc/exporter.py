@@ -1154,11 +1154,36 @@ def export_simplified_ifc(
     site = w.entity(f"IFCSITE({_step_string(_guid())},#{owner},{_step_string(project.location or 'Local Site')},'Generated from PitGuard project',$,#{site_place},$,$,.ELEMENT.,$,$,$,$,$)")
     building_place = w.local_placement(site_place, 0, 0, 0)
     building = w.entity(f"IFCBUILDING({_step_string(_guid())},#{owner},'Foundation Pit Support Model',$,$,#{building_place},$,$,.ELEMENT.,$,$,$)")
-    storey_place = w.local_placement(building_place, 0, 0, 0)
-    storey = w.entity(f"IFCBUILDINGSTOREY({_step_string(_guid())},#{owner},'Temporary support stage model',$,$,#{storey_place},$,$,.ELEMENT.,0.)")
+    # 三层而不是一层：Revit / Navisworks 打开后能按标高过滤，
+    # 排桩、等代墙、冠梁支撑各归各层，不再是所有构件堆在一个 storey 里。
+    crown_levels = [float(beam.elevation) for beam in (project.retaining_system.crown_beams or [])]
+    support_levels = [float(item.elevation) for item in (project.retaining_system.supports or [])]
+    storey_specs = [
+        ("Piles", (min(crown_levels) if crown_levels else 0.0) - 0.45),
+        ("Calculation wall (equivalent)", 0.0),
+        ("Crown beams and struts", min(support_levels + crown_levels) if (support_levels or crown_levels) else 0.0),
+    ]
+    storey_ids: list[int] = []
+    storey_places: dict[str, int] = {}
+    storey_entities: dict[str, int] = {}
+    for storey_name, storey_elevation in storey_specs:
+        place_id = w.local_placement(building_place, 0, 0, 0)
+        entity_id = w.entity(
+            f"IFCBUILDINGSTOREY({_step_string(_guid())},#{owner},{_step_string(storey_name)},$,$,"
+            f"#{place_id},$,$,.ELEMENT.,{_real(storey_elevation)})"
+        )
+        storey_ids.append(entity_id)
+        storey_entities[storey_name] = entity_id
+        storey_places[storey_name] = place_id
+    storey_place = storey_places["Calculation wall (equivalent)"]
+    pile_storey_place = storey_places["Piles"]
+    strut_storey_place = storey_places["Crown beams and struts"]
     w.entity(f"IFCRELAGGREGATES({_step_string(_guid())},#{owner},$,$,#{project_entity},(#{site}))")
     w.entity(f"IFCRELAGGREGATES({_step_string(_guid())},#{owner},$,$,#{site},(#{building}))")
-    w.entity(f"IFCRELAGGREGATES({_step_string(_guid())},#{owner},$,$,#{building},(#{storey}))")
+    w.entity(
+        f"IFCRELAGGREGATES({_step_string(_guid())},#{owner},$,$,#{building},"
+        f"({','.join(f'#{sid}' for sid in storey_ids)}))"
+    )
 
     material_concrete = w.entity("IFCMATERIAL('Concrete',$,$)")
     material_rebar = w.entity("IFCMATERIAL('Reinforcement steel',$,$)")
@@ -1170,6 +1195,7 @@ def export_simplified_ifc(
     w.rebar_strong_style_id = w.surface_style("Rebar strong hoop", 0.85, 0.60, 0.10)
 
     product_ids: list[int] = []
+    all_pile_product_ids: list[int] = []
     concrete_product_ids: list[int] = []
     steel_product_ids: list[int] = []
     rebar_product_ids: list[int] = []
@@ -1256,6 +1282,7 @@ def export_simplified_ifc(
             for beam in (getattr(project.retaining_system, "crown_beams", None) or [])
         ]
         crown_bottom = min(crown_bottoms) if crown_bottoms else None
+        wall_slice_start = len(product_ids)
         for wall in project.retaining_system.diaphragm_walls:
             if len(wall.axis.points) < 2:
                 continue
@@ -1282,12 +1309,14 @@ def export_simplified_ifc(
                 })
             if detailed_mode and pile_row_spec:
                 pile_ids, pile_bar_ids = _emit_pile_row(
-                    w, owner=owner, context=context, storey_place=storey_place,
+                    w, owner=owner, context=context, storey_place=pile_storey_place,
                     wall=wall, spec=pile_row_spec, crown_bottom=crown_bottom,
                     as_proxy=construction_visual_mode,
                 )
                 product_ids.extend(pile_ids)
                 product_ids.extend(pile_bar_ids)
+                all_pile_product_ids.extend(pile_ids)
+                all_pile_product_ids.extend(pile_bar_ids)
                 rebar_product_ids.extend(pile_bar_ids)
                 child_elements.extend(pile_ids)
                 if assembly:
@@ -1445,6 +1474,7 @@ def export_simplified_ifc(
                         "chainageM": right_panel.get("startChainageM"),
                         "ifcRelationEntityId": relation,
                     })
+        wall_product_ids = product_ids[wall_slice_start:]
         for beam in [*project.retaining_system.crown_beams, *project.retaining_system.wale_beams, *getattr(project.retaining_system, "ring_beams", [])]:
             axis = _axis_from_polyline(beam)
             if not axis:
@@ -1454,7 +1484,7 @@ def export_simplified_ifc(
             width = beam.section.width or 0.8
             height = beam.section.height or 0.8
             mx, my = _midpoint(start, end)
-            placement = w.local_placement(storey_place, mx, my, beam.elevation - height / 2.0, refdir=(ux, uy, 0))
+            placement = w.local_placement(strut_storey_place, mx, my, beam.elevation - height / 2.0, refdir=(ux, uy, 0))
             shape = w.rect_swept_shape(context, length, width, height)
             entity_name = "IFCBEAM"
             predefined = ".BEAM."
@@ -1478,7 +1508,7 @@ def export_simplified_ifc(
             })
             if detailed_mode:
                 beam_bars = _emit_beam_cage_bars(
-                    w, owner=owner, context=context, storey_place=storey_place,
+                    w, owner=owner, context=context, storey_place=strut_storey_place,
                     beam=beam, as_proxy=construction_visual_mode,
                 )
                 product_ids.extend(beam_bars)
@@ -1493,7 +1523,7 @@ def export_simplified_ifc(
             width = support.section.width or 0.8
             height = support.section.height or 0.8
             mx, my = _midpoint(support.start, support.end)
-            placement = w.local_placement(storey_place, mx, my, support.elevation - height / 2.0, refdir=(ux, uy, 0))
+            placement = w.local_placement(strut_storey_place, mx, my, support.elevation - height / 2.0, refdir=(ux, uy, 0))
             shape = w.rect_swept_shape(context, length, width, height)
             element = w.entity(f"IFCBEAM({_step_string(_guid())},#{owner},{_step_string(support.code)},'Internal support beam generated by PitGuard',$,#{placement},#{shape},$,.BEAM.)")
             product_ids.append(element)
@@ -1541,7 +1571,7 @@ def export_simplified_ifc(
             })
             if detailed_mode:
                 support_bars = _emit_support_cage_bars(
-                    w, owner=owner, context=context, storey_place=storey_place,
+                    w, owner=owner, context=context, storey_place=strut_storey_place,
                     support=support, as_proxy=construction_visual_mode,
                 )
                 product_ids.extend(support_bars)
@@ -1555,7 +1585,7 @@ def export_simplified_ifc(
             width = column.section.width or 0.6
             depth = column.section.height or width
             height = column.top_elevation - column.bottom_elevation
-            placement = w.local_placement(storey_place, column.location.x, column.location.y, column.bottom_elevation, refdir=(1, 0, 0))
+            placement = w.local_placement(strut_storey_place, column.location.x, column.location.y, column.bottom_elevation, refdir=(1, 0, 0))
             shape = w.rect_swept_shape(context, width, depth, height)
             element = w.entity(f"IFCCOLUMN({_step_string(_guid())},#{owner},{_step_string(column.code)},'Temporary column generated by PitGuard',$,#{placement},#{shape},$,.COLUMN.)")
             product_ids.append(element)
@@ -1598,7 +1628,7 @@ def export_simplified_ifc(
         for node in getattr(project.retaining_system, "support_nodes", []):
             plate = node.bearing_plate
             size = max(0.35, plate.plate_width if plate else 0.5)
-            placement = w.local_placement(storey_place, node.location.x, node.location.y, node.elevation - size / 2.0, refdir=(1, 0, 0))
+            placement = w.local_placement(strut_storey_place, node.location.x, node.location.y, node.elevation - size / 2.0, refdir=(1, 0, 0))
             shape = w.rect_swept_shape(context, size, size, size)
             element = w.entity(f"IFCBUILDINGELEMENTPROXY({_step_string(_guid())},#{owner},{_step_string(node.code)},'Support-wale node generated by PitGuard',$,#{placement},#{shape},$,$)")
             product_ids.append(element)
@@ -1732,8 +1762,22 @@ def export_simplified_ifc(
     concrete_product_ids = [pid for pid in concrete_product_ids if pid is not None]
     steel_product_ids = [pid for pid in steel_product_ids if pid is not None]
     rebar_product_ids = [pid for pid in rebar_product_ids if pid is not None]
-    if product_ids:
-        w.entity(f"IFCRELCONTAINEDINSPATIALSTRUCTURE({_step_string(_guid())},#{owner},'PitGuard model containment',$,(" + ",".join(f"#{pid}" for pid in product_ids) + f"),#{storey})")
+    pile_set = set(all_pile_product_ids)
+    wall_product_ids = [pid for pid in wall_product_ids if pid not in pile_set]
+    wall_set = set(wall_product_ids)
+    strut_ids = [pid for pid in product_ids if pid not in pile_set and pid not in wall_set]
+    for layer_ids, layer_storey, layer_name in (
+        (all_pile_product_ids, storey_entities['Piles'], 'Piles'),
+        (wall_product_ids, storey_entities['Calculation wall (equivalent)'], 'Diaphragm wall (equivalent)'),
+        (strut_ids, storey_entities['Crown beams and struts'], 'Crown beams and struts'),
+    ):
+        layer_ids = [pid for pid in layer_ids if pid is not None]
+        if layer_ids:
+            w.entity(
+                f"IFCRELCONTAINEDINSPATIALSTRUCTURE({_step_string(_guid())},#{owner},"
+                f"'PitGuard {_ifc_text(layer_name)} containment',$,("
+                + ",".join(f"#{pid}" for pid in layer_ids) + f"),#{layer_storey})"
+            )
     if concrete_product_ids:
         w.entity(f"IFCRELASSOCIATESMATERIAL({_step_string(_guid())},#{owner},'Concrete material association',$,(" + ",".join(f"#{pid}" for pid in concrete_product_ids) + f"),#{material_concrete})")
     if steel_product_ids:
