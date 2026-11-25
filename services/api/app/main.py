@@ -159,6 +159,9 @@ for _router in (
     app.include_router(_router)
 
 app.include_router(one_strut_router)
+# 上游工程专项接口（M5/M7 案例、M3 拓扑），合并 AI 层时保留
+from app.routers.engineering_specialties import router as specialties_router
+app.include_router(specialties_router)
 from app.agents.router import router as agent_router
 app.include_router(agent_router)
 # M3 物理研究接口（上游能力，合并 AI 层时保留）
