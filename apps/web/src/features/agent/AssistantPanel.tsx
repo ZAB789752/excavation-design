@@ -14,8 +14,9 @@ type Props = {
   projectName?: string;
   onProjectChanged?: () => void;
 };
+
 type Notice = { id: number; kind: 'alert' | 'error'; title: string; text: string };
-type Gap = { text: string; items: string[]; tone: 'ok' | 'warn' | 'error' };
+type Gap = { text: string; items: string[]; missing?: string[]; defaults?: string[]; tone: 'ok' | 'warn' | 'error' };
 
 const POLL_INTERVAL_MS = 15000;
 const NOTICE_LIFETIME_MS = 12000;
@@ -79,9 +80,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [attachBusy, setAttachBusy] = useState(false);
   const [attachStage, setAttachStage] = useState('');
   const [dropActive, setDropActive] = useState(false);
-  const [section, setSection] = useState('');
-  const [runP3, setRunP3] = useState(false);
-  const [batchAll, setBatchAll] = useState(false);
   const [petOffset, setPetOffset] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(PET_POS_KEY) || 'null');
@@ -94,7 +92,6 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const [dragging, setDragging] = useState(false);
   const [viewport, setViewport] = useState(() => ({ w: window.innerWidth, h: window.innerHeight }));
   const threadRef = useRef<HTMLDivElement>(null);
-  const attachRef = useRef<HTMLInputElement>(null);
   const loadedRef = useRef(false);
   const noticeSeq = useRef(0);
   const lastSignature = useRef('');
@@ -258,8 +255,15 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const refreshGap = useCallback(async () => {
     try {
       const basis = await api.designBasisMissing(projectId);
-      if (basis.count > 0) {
-        setGap({ text: basis.text, items: basis.items.map((item) => item.label), tone: 'warn' });
+      if (basis.count > 0 || (basis.defaultCount ?? 0) > 0) {
+        const missing = (basis.missing ?? []).map((item) => item.label);
+        const defaults = (basis.defaults ?? []).map((item) => item.label);
+        setGap({
+          text: basis.text,
+          items: basis.items.map((item) => item.label),
+          missing, defaults,
+          tone: missing.length ? 'error' : 'warn',
+        });
         return;
       }
       const plan = await api.agentPlan(projectId);
@@ -404,23 +408,8 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const ingestFile = useCallback(async (file: File) => {
     setAttachBusy(true); setError(''); setAttachStage('正在读取文件…');
     try {
-      if (file.name.toLowerCase().endsWith('.pdf') && batchAll) {
-        const started = await api.startCalculationBookBatch(file);
-        setAttachStage('已提交，正在逐个剖面建模计算…');
-        let status = await api.taskStatus(started.taskId);
-        for (let i = 0; i < 600 && !['success', 'failed', 'cancelled'].includes(status.status); i += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 3000));
-          status = await api.taskStatus(started.taskId);
-          setAttachStage(status.currentStep || '正在逐个剖面计算…');
-        }
-        if (status.status !== 'success') throw new Error(status.error || `批量未完成：${status.status}`);
-        await refreshGap();
-        onProjectChanged?.();
-        pushNotice('alert', '多剖面批量完成', '每个剖面各建一个项目，汇总表已写入 exports/book-sections-summary-*.csv');
-        return;
-      }
       if (file.name.toLowerCase().endsWith('.pdf')) {
-        const started = await api.startCalculationBookAutopilot(projectId, file, section || undefined, runP3);
+        const started = await api.startCalculationBookAutopilot(projectId, file);
         setAttachStage('已提交，正在解析计算书…');
         let status = await api.taskStatus(started.taskId);
         for (let i = 0; i < 300 && !['success', 'failed', 'cancelled'].includes(status.status); i += 1) {
@@ -467,7 +456,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
       setError(text);
       pushNotice('error', '文件录入失败', text);
     } finally { setAttachBusy(false); setAttachStage(''); }
-  }, [projectId, activeId, reloadMessages, refreshGap, reportRouter, pushNotice, onProjectChanged, section, runP3, batchAll]);
+  }, [projectId, activeId, reloadMessages, refreshGap, reportRouter, pushNotice, onProjectChanged]);
 
   const handleFileDragOver = useCallback((event: React.DragEvent) => {
     if (!Array.from(event.dataTransfer.types).includes('Files')) return;
@@ -491,6 +480,16 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     pushNotice('alert', '已接收计算书', `${file.name} 正在提交自动生成…`);
     void ingestFile(file);
   }, [ingestFile, pushNotice]);
+
+
+
+
+
+  // 进入/切换项目时展开一次，让助手的上下文跟着当前项目走
+  useEffect(() => {
+    if (!projectId) return;
+    setOpen(true);
+  }, [projectId]);
 
   const failCount = status?.failCount ?? 0;
   const badge = status?.statusUnavailable || notices.some((n) => n.kind === 'error')
@@ -523,7 +522,8 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
   const roomLeft = ballLeft - 8;
   const panelWidth = Math.min(356, viewport.w - 40);
   const horizontal = roomRight >= panelWidth || roomRight >= roomLeft ? 'fromLeft' : 'fromRight';
-  const dockHeight = Math.max(240, Math.min(500, vertical === 'above' ? roomAbove : roomBelow));
+  // 空面板也保持和对话态一样高：面板就该有面板的样子
+  const dockHeight = Math.max(320, Math.min(620, vertical === 'above' ? roomAbove : roomBelow));
   const placement = `place-${vertical}-${horizontal}`;
 
   return (
@@ -536,6 +536,7 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
     >
       {open ? (
         <aside className="agentDock" style={{ height: dockHeight }} aria-label="智能设计助手">
+
           <header className="agentDockHeader">
             <div>
               <strong>智能设计助手</strong>
@@ -545,15 +546,13 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
           </header>
 
           <div className={`agentDockGap ${gap.tone}`} role="status" title={gap.text}>
-            {gap.text}
+            {gap.missing?.length ? <span className="gapMissing">缺：{gap.missing.join('、')}</span> : null}
+            {gap.defaults?.length ? <span className="gapDefault">默认：{gap.defaults.join('、')}</span> : null}
+            {!gap.missing?.length && !gap.defaults?.length ? gap.text : null}
           </div>
 
-          <div className="agentDockMessages" ref={threadRef}>
-            {messages.length === 0 ? (
-              <p className="agentDockEmpty">
-                贴一段参数（如「施工荷载 30kPa，基坑安全等级三级」），或把文件直接拖到桌宠上：PDF 走全流程自动生成；Excel / Word / CSV / 图片 用来补参数。
-              </p>
-            ) : messages.map((message) => (
+          <div className={`agentDockBody ${messages.length ? 'hasMessages' : ''}`} ref={threadRef}>
+            {messages.map((message) => (
               message.role === 'tool' ? (
                 <article key={message.id} className="agentMessage tool">
                   <small>任务 · {new Date(message.createdAt).toLocaleTimeString()}</small>
@@ -571,73 +570,29 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
             ))}
           </div>
 
-          <footer className="agentDockCompose agentDockComposeSlim">
-            <select
-              className="agentDockSection"
-              value={section}
-              onChange={(event) => setSection(event.target.value)}
-              title="计算书里的剖面；留空按 2-2 自动选"
-            >
-              <option value="">剖面：自动(2-2)</option>
-              <option value="1-1">1-1</option>
-              <option value="1'-1'">1'-1'</option>
-              <option value="2-2">2-2</option>
-              <option value="3-3">3-3</option>
-              <option value="3'-3'">3'-3'</option>
-              <option value="4-4">4-4</option>
-              <option value="4'-4'">4'-4'</option>
-              <option value="5-5">5-5</option>
-              <option value="5'-5'">5'-5'</option>
-              <option value="出土口">出土口</option>
-            </select>
-            <label className="agentDockP3" title="整本书的每个剖面各算一遍，出一张对照表">
-              <input type="checkbox" checked={batchAll} onChange={(event) => setBatchAll(event.target.checked)} />
-              批量
-            </label>
-            <label className="agentDockP3" title="出包后继续跑 1203 项预埋件与套筒深化">
-              <input type="checkbox" checked={runP3} onChange={(event) => setRunP3(event.target.checked)} />
-              P3
-            </label>
-            <button
-              type="button"
-              className="agentDockAttach"
-              onClick={() => attachRef.current?.click()}
-              disabled={attachBusy}
-              title="上传 PDF 或提取结果 JSON，自动填入设计基准"
-              aria-label="上传文件自动填入设计基准"
-            >
-              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M21.44 11.05l-9.19 9.19a5 5 0 01-7.07-7.07l9.19-9.19a3 3 0 014.24 4.24l-9.19 9.19a1 1 0 01-1.41-1.41l8.49-8.49" />
-              </svg>
-            </button>
-            <input
-              ref={attachRef}
-              type="file"
-              accept=".pdf,.docx,.xlsx,.csv,.txt,.md,.png,.jpg,.jpeg,.json"
-              hidden
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void ingestFile(file);
-                event.target.value = '';
-              }}
-            />
-            <input
-              className="agentDockInput"
-              type="text"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') { event.preventDefault(); void send(); }
-              }}
-              placeholder={attachBusy ? (attachStage || '正在读取文件…') : '描述问题 / 贴参数，或上传 PDF'}
-              aria-label="向智能设计助手提问"
-            />
-            <button type="button" onClick={() => void send()} disabled={busy || attachBusy || !draft.trim()}>
-              {busy ? '发送中' : '发送'}
-            </button>
+          <footer className="agentDockCompose">
+            <div className="agentDockComposeInput">
+              <textarea
+                className="agentDockInput"
+                rows={3}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
+                }}
+                placeholder={attachBusy
+                  ? (attachStage || '正在读取文件…')
+                  : '把 PDF / Excel / Word / 图片 拖进来；也可以直接说：施工荷载改成 35kPa'}
+                aria-label="向智能设计助手提问"
+              />
+              <button type="button" className="agentDockSend" onClick={() => void send()} disabled={busy || attachBusy || !draft.trim()}>
+                {busy ? '发送中' : '发送'}
+              </button>
+            </div>
           </footer>
 
           {error ? <p className="agentDockError" role="alert">{error}</p> : null}
+
         </aside>
       ) : (
         notices.length ? <div className="agentDockToasts">{renderNotices()}</div> : null
@@ -665,6 +620,9 @@ export default function AssistantPanel({ projectId, projectName, onProjectChange
         </button>
         {badge ? <span className="agentPetBadge">{badge}</span> : null}
       </div>
+
+
+
     </div>
   );
 }

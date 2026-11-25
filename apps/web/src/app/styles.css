@@ -2909,3 +2909,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 @media (max-width: 640px) {
   .globalRequestOverlay.passive { inset: 64px 10px auto 10px; width: auto; }
 }
+
+.panelTitleActions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+.groupToggle { border: 0; background: transparent; color: #1d4ed8; cursor: pointer; font-size: 12px; padding: 0 6px 0 0; }
+.groupChild td { background: #f8fafc; color: #475569; font-size: 12.5px; }

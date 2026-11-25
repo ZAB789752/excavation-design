@@ -29,6 +29,34 @@ PILE_PATTERNS = {
     "spacing": re.compile(r"桩间距[:：]\s*([\d.]+)\s*m"),
     "length": re.compile(r"桩长[:：]\s*([\d.]+)\s*m"),
 }
+# 排桩钢筋笼：主筋直径/根数、箍筋直径/间距、保护层（图审本按"钢筋中心至边距"给）
+CAGE_PATTERNS = {
+    "mainDiameterMm": re.compile(r"钢筋直径\s*\(?mm\)?\s*[:：]?\s*(\d+(?:\.\d+)?)"),
+    "providedBarCount": re.compile(r"实配根数\s*[:：]?\s*(\d+)"),
+    "barCount": re.compile(r"钢筋根数\s*[:：]?\s*(\d+)"),
+    "barSpacingMm": re.compile(r"钢筋间距\s*\(?mm\)?\s*[:：]?\s*(\d+(?:\.\d+)?)"),
+    "hoopDiameterMm": re.compile(r"箍筋直径\s*\(?mm\)?\s*[:：]?\s*(\d+(?:\.\d+)?)"),
+    "hoopSpacingMm": re.compile(r"箍筋间距计算值\s*\(?mm\)?\s*\(?双肢\)?\s*[:：]?\s*(\d+(?:\.\d+)?)"),
+    "centerCoverMm": re.compile(r"钢筋中心至边距\s*\(?mm\)?\s*[:：]?\s*(\d+(?:\.\d+)?)"),
+}
+
+
+def parse_pile_cage(text: str) -> dict[str, Any]:
+    """排桩钢筋笼参数：取书中最后一处配筋结果（最深/控制剖面）。"""
+    cage: dict[str, Any] = {}
+    for key, pattern in CAGE_PATTERNS.items():
+        found = pattern.findall(text)
+        if not found:
+            continue
+        value = float(found[-1])
+        cage[key] = int(value) if value.is_integer() and key.endswith("Count") else value
+    if cage.get("providedBarCount"):
+        cage["barCount"] = cage["providedBarCount"]
+    main = float(cage.get("mainDiameterMm") or 0)
+    center_cover = float(cage.get("centerCoverMm") or 0)
+    if main and center_cover:
+        cage["clearCoverMm"] = round(max(center_cover - main / 2.0, 25.0), 1)
+    return cage
 
 
 def extract_text(data: bytes) -> str:
@@ -111,6 +139,7 @@ def parse_book(text: str, section: str | None = None) -> dict[str, Any]:
         "layers": layers,
         "section": section_title,
         "pile": pile,
+        "pileCage": parse_pile_cage(text),
     }
 
 

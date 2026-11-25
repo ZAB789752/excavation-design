@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { api } from '../api/client';
+import BimModelCard from '../components/BimModelCard';
 import BoreholeImport from '../components/BoreholeImport';
 import ExcavationEditor from '../components/ExcavationEditor';
 import RebarDesignPanel from '../components/RebarDesignPanel';
@@ -1634,6 +1635,7 @@ function ExportPanel({ project, runTask, selectedLocator, onRefresh, viewMode }:
     {blocked && <div className="warning">当前成果存在阻断或尚未计算。审查成果可以生成，施工版发行仍由质量闸门控制。</div>}
     <div className="actionStrip simplifiedActions"><button onClick={() => runTask('全流程计算与成果生成', 'full_delivery', { topN: 3 })} disabled={!project.retainingSystem}>一键生成完整交付包</button><button className="secondary" onClick={() => setAdvanced((v) => !v)}>{advanced ? '收起扩展格式' : '扩展导出格式'}</button></div>
     <div className="exportGrid preferredExports">
+      <BimModelCard projectId={project.id} />
       <ExportCard projectId={project.id} taskOperation="export_coordinated_delivery" title="协同成果交付包" description="施工图、批量PDF、IFC多配置、计算书、钢筋深化、项目快照、逐图质量和验收矩阵。" href={api.coordinatedDeliveryPackageUrl(project.id, 'review')} button="生成协同交付包" />
       <ExportCard projectId={project.id} taskOperation="export_formal_drawings" title="正式图纸发行包" description="CAD、批量PDF、图纸—模型—计算—规范索引、修订和逐图质量门禁。" href={api.formalDrawingPackageUrl(project.id, 'review')} button="生成图纸包" />
       <ExportCard projectId={project.id} taskOperation="export_ifc_construction_visual" title="IFC 可视化模型" description="用于外部 BIM 查看和专业协调。" href={api.exportUrl(project.id, 'ifc-construction-visual')} button="下载 IFC" />

@@ -9,7 +9,7 @@ from .contracts import (StartRun,RunDecision,ConversationCreate,MessageCreate,
 from .store import AgentStore,ConflictError
 from .catalog import catalog
 from .engine import AgentRuntime
-from .model_gateway import configuration
+from .model_gateway import configuration, GatewayUnavailable, test_connection, update_configuration
 from . import assistant
 from . import document_agent
 from . import tools as tool_registry
@@ -58,6 +58,35 @@ def get_agent_catalog():
 @router.get('/model/configuration')
 def model_configuration():
     return configuration()
+
+
+@router.put('/model/configuration')
+def save_model_configuration(request:Request, body:dict):
+    """桌宠右键里改 API 接入：写 runtime/llm_settings.json，立即生效。"""
+    identity=_actor(request)
+    if ROLE_RANK.get(identity.role,0)<ROLE_RANK.get('admin',50):
+        raise HTTPException(403,detail='修改模型接入需要管理员权限')
+    try:
+        return update_configuration(body or {})
+    except GatewayUnavailable as exc:
+        raise HTTPException(400,detail=str(exc)) from exc
+
+
+@router.post('/model/test')
+def test_model_connection(request:Request):
+    _actor(request)
+    return test_connection()
+
+
+@router.get('/model/calls')
+def model_call_log(limit:int=20):
+    """最近的真实模型调用：时间、用途、模型、token、耗时。"""
+    from .store import AgentStore
+    rows=AgentStore().model_calls(limit=max(1,min(limit,200)))
+    totals={'calls':len(rows),
+            'promptTokens':sum(int(r.get('promptTokens') or 0) for r in rows),
+            'completionTokens':sum(int(r.get('completionTokens') or 0) for r in rows)}
+    return {'calls':rows,'totals':totals}
 
 
 @router.get('/roles')
@@ -247,6 +276,84 @@ async def calculation_book_autopilot(request:Request,
         'poll':'GET /api/tasks/{taskId}',
         'formalConstructionIssue':False,
     }
+
+
+@router.post('/calculation-book/batch')
+async def calculation_book_batch(request:Request,
+                                 file:UploadFile=File(...),
+                                 sections:str|None=Form(default=None)):
+    """按剖面批量：逐剖面建模计算，出一张对照表（不配筋、不出包）。"""
+    identity=_actor(request)
+    if ROLE_RANK.get(identity.role,0)<ROLE_RANK['designer']:
+        raise HTTPException(403,detail='批量计算要求设计人员权限')
+    data=await file.read()
+    if not data or not data.lstrip()[:5].startswith(b'%PDF'):
+        raise HTTPException(400,detail='请上传有效的计算书 PDF')
+    from pathlib import Path
+    from uuid import uuid4
+    from app.tasks.manager import task_manager
+    from app.schemas.domain import Project
+    from app.storage.repository import ProjectRepository, shared_project_store
+
+    filename=file.filename or 'calculation-book.pdf'
+    inbox=Path(__file__).resolve().parents[2]/'runtime'/'inbox'
+    inbox.mkdir(parents=True,exist_ok=True)
+    target=inbox/f"batch-{uuid4().hex[:12]}.pdf"
+    target.write_bytes(data)
+
+    repo=ProjectRepository(store=shared_project_store())
+    project=repo.create(Project(name=f'{Path(filename).stem[:40]}（多剖面批量）'),actor=identity.actor)
+    payload={'projectId':project.id,'sourcePath':str(target),'filename':filename,'actor':identity.actor}
+    if sections:
+        payload['sections']=[item.strip() for item in sections.split(',') if item.strip()]
+    task=task_manager.submit(project.id,'calculation_book_batch',payload)
+    return {'taskId':task.id,'projectId':project.id,'sections':payload.get('sections') or '自动识别',
+            'poll':'GET /api/tasks/{taskId}','formalConstructionIssue':False}
+
+
+@router.post('/calculation-book/import')
+async def calculation_book_import(request:Request, file:UploadFile=File(...)):
+    """列表页拖入计算书：先数剖面。一个就单项目，多个就建分组。"""
+    identity=_actor(request)
+    if ROLE_RANK.get(identity.role,0)<ROLE_RANK['designer']:
+        raise HTTPException(403,detail='导入计算书要求设计人员权限')
+    data=await file.read()
+    if not data or not data.lstrip()[:5].startswith(b'%PDF'):
+        raise HTTPException(400,detail='请上传有效的计算书 PDF')
+    from pathlib import Path
+    from uuid import uuid4
+    from app.agents import calculation_book_autopilot as autopilot
+    from app.tasks.manager import task_manager
+    from app.schemas.domain import Project
+    from app.storage.repository import ProjectRepository, shared_project_store
+
+    filename=file.filename or 'calculation-book.pdf'
+    inbox=Path(__file__).resolve().parents[2]/'runtime'/'inbox'
+    inbox.mkdir(parents=True,exist_ok=True)
+    target=inbox/f"import-{uuid4().hex[:12]}.pdf"
+    target.write_bytes(data)
+
+    try:
+        titles=[b['title'] for b in autopilot._layer_blocks(autopilot.extract_text(data)) if b['title']]
+    except Exception:
+        titles=[]
+    repo=ProjectRepository(store=shared_project_store())
+    stem=Path(filename).stem[:40]
+
+    if len(titles)<=1:
+        project=repo.create(Project(name=stem),actor=identity.actor)
+        task=task_manager.submit(project.id,'calculation_book_autopilot',{
+            'projectId':project.id,'sourcePath':str(target),'filename':filename,
+            'actor':identity.actor,'section':titles[0] if titles else None})
+        return {'mode':'single','taskId':task.id,'projectId':project.id,
+                'sections':titles,'formalConstructionIssue':False}
+
+    parent=repo.create(Project(name=f'{stem}（{len(titles)} 个剖面）'),actor=identity.actor)
+    task=task_manager.submit(parent.id,'calculation_book_batch',{
+        'projectId':parent.id,'sourcePath':str(target),'filename':filename,
+        'actor':identity.actor,'sections':titles})
+    return {'mode':'group','taskId':task.id,'groupId':parent.id,'count':len(titles),
+            'sections':titles,'formalConstructionIssue':False}
 
 
 @router.get('/calculation-book/status')

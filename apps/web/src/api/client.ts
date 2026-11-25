@@ -528,6 +528,18 @@ export const api = {
       method: 'POST', body: form, timeoutMs: 180000, responseIdleTimeoutMs: 180000,
       activity: { label: '计算书自动生成' } });
   },
+  importCalculationBook: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<{ mode: 'single' | 'group'; taskId: string; projectId?: string;
+      groupId?: string; count?: number; sections?: string[] }>(
+      '/api/agents/calculation-book/import', {
+        method: 'POST', body: form, timeoutMs: 180000, responseIdleTimeoutMs: 180000,
+        activity: { label: '正在识别计算书' } });
+  },
+  projectGroup: (projectId: string) => request<{ groupId: string; filename?: string;
+    sections: string[]; children: Array<{ id: string; name: string; section?: string; status?: string }> }>(
+    `/api/projects/${projectId}/group`, { activity: { quiet: true, cacheTtlMs: 0 } }),
   startCalculationBookBatch: (file: File, sections?: string) => {
     const form = new FormData();
     if (sections) form.append('sections', sections);
@@ -537,6 +549,23 @@ export const api = {
         method: 'POST', body: form, timeoutMs: 180000, responseIdleTimeoutMs: 180000,
         activity: { label: '多剖面批量计算' } });
   },
+  modelConfiguration: () => request<{
+    enabled: boolean; configured: boolean; keyHint?: string; source?: string;
+    baseUrl?: string; modelSlots?: Record<string, string>; allowedHosts?: string[];
+    note?: string;
+  }>('/api/agents/model/configuration', { activity: { quiet: true, cacheTtlMs: 0 } }),
+  saveModelConfiguration: (payload: Record<string, string>) => request<Record<string, unknown>>(
+    '/api/agents/model/configuration', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload), activity: { label: '正在保存模型接入' } }),
+  modelCallLog: (limit = 10) => request<{
+    calls: Array<{ id: number; createdAt: string; purpose: string; model: string; ok: boolean;
+      promptTokens: number | null; completionTokens: number | null; durationMs: number }>;
+    totals: { calls: number; promptTokens: number; completionTokens: number };
+  }>(`/api/agents/model/calls?limit=${limit}`, { activity: { quiet: true, cacheTtlMs: 0 } }),
+  testModelConnection: () => request<{
+    ok: boolean; reason?: string; latencyMs?: number; model?: string; reply?: string;
+  }>('/api/agents/model/test', { method: 'POST', timeoutMs: 40000, activity: { label: '正在测试模型连通' } }),
   taskStatus: (taskId: string) => request<{
     id: string; status: string; progress: number; currentStep?: string; error?: string | null;
   }>(`/api/tasks/${taskId}`, { method: 'GET' }),
@@ -558,7 +587,10 @@ export const api = {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input), timeoutMs: 90000, responseIdleTimeoutMs: 90000,
     activity: { label: '总控正在分派任务' } }),
-  designBasisMissing: (projectId: string) => request<DesignBasisGap>(
+  designBasisMissing: (projectId: string) => request<DesignBasisGap & {
+    defaultCount?: number; missing?: Array<{ key: string; label: string }>;
+    defaults?: Array<{ key: string; label: string }>;
+  }>(
     `/api/agents/design-basis/missing?project_id=${encodeURIComponent(projectId)}`, {
       timeoutMs: 30000, activity: { quiet: true, cacheTtlMs: 0 } }),
   ingestDesignBasis: (

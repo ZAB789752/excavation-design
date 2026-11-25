@@ -1,0 +1,103 @@
+.msOverlay {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(15, 30, 50, .38);
+  display: flex; align-items: center; justify-content: center;
+}
+.msPanel {
+  width: min(720px, calc(100vw - 48px));
+  max-height: calc(100vh - 72px);
+  background: #fff; border-radius: 14px;
+  box-shadow: 0 28px 70px rgba(10, 25, 45, .32);
+  display: flex; flex-direction: column; overflow: hidden; color: #172033;
+}
+.msHead {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 18px 22px 14px; border-bottom: 1px solid #eef2f7;
+}
+.msHead strong { display: block; font-size: 15px; color: #1f3a5f; }
+.msHead span { font-size: 11.5px; color: #6b7c93; }
+
+.msBody { display: grid; grid-template-columns: 168px minmax(0, 1fr); min-height: 0; flex: 1; }
+.msProviders {
+  border-right: 1px solid #eef2f7; background: #fbfcfe;
+  padding: 10px 8px; display: grid; gap: 2px; align-content: start; overflow-y: auto;
+}
+.msProviders button {
+  text-align: left; border: 0; background: transparent; border-radius: 8px;
+  padding: 9px 11px; font-size: 12.5px; color: #334155; cursor: pointer;
+}
+.msProviders button:hover { background: #eef2f7; }
+.msProviders button.on { background: #e8f0fe; color: #1d4ed8; font-weight: 600; }
+
+.msForm { padding: 16px 22px 8px; display: grid; gap: 14px; align-content: start; overflow-y: auto; }
+.msRow { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #6b7c93; }
+.msChip {
+  font-style: normal; font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+  background: #f1f5f9; color: #64748b;
+}
+.msChip.ok { background: #e8f7ef; color: #1d7a4f; }
+
+.msField { display: grid; gap: 6px; font-size: 12px; color: #6b7c93; }
+.msField input, .msField select {
+  height: 38px; width: 100%; box-sizing: border-box; padding: 0 11px;
+  border: 1px solid #dbe3ec; border-radius: 9px; background: #fff;
+  font-size: 13px; color: #1f3a5f; font-family: inherit;
+}
+.msField input:focus, .msField select:focus { outline: 2px solid rgba(29, 78, 216, .2); border-color: #93c5fd; }
+
+.msUrl {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  height: 38px; padding: 0 11px; border: 1px solid #eef2f7; border-radius: 9px; background: #f8fafc;
+}
+.msUrl code { font-size: 12px; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msUrl button { border: 0; background: transparent; color: #1d4ed8; font-size: 12px; cursor: pointer; padding: 2px 4px; }
+
+.msSwitch {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 9px;
+  padding: 11px 13px; background: #f8fafc; border: 1px solid #eef2f7; border-radius: 10px;
+  font-size: 12px; color: #475569; line-height: 1.55;
+}
+.msSwitch input { width: 15px; height: 15px; margin-top: 1px; }
+
+.msBad { margin: 0; font-size: 12px; color: #b42318; }
+.msGood { margin: 0; font-size: 12px; color: #1d7a4f; }
+
+.msFoot {
+  display: flex; justify-content: flex-end; gap: 10px;
+  padding: 14px 22px 18px; border-top: 1px solid #eef2f7;
+}
+.msPrimary {
+  height: 36px; padding: 0 22px; border-radius: 9px; font-size: 13px;
+  border: 1px solid #1d4ed8; background: #1d4ed8; color: #fff; cursor: pointer;
+}
+.msGhost {
+  height: 36px; padding: 0 18px; border-radius: 9px; font-size: 13px;
+  border: 1px solid #dbe3ec; background: #fff; color: #334155; cursor: pointer;
+}
+.msGhost:disabled, .msPrimary:disabled { opacity: .55; cursor: default; }
+
+@media (max-width: 640px) {
+  .msBody { grid-template-columns: 1fr; }
+  .msProviders { flex-direction: row; display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid #eef2f7; }
+  .msProviders button { white-space: nowrap; }
+}
+
+.msReq::before { content: '*'; color: #d92d20; margin-right: 2px; }
+.msHintText { font-style: normal; font-size: 11px; color: #94a3b8; margin-left: auto; }
+.msFieldHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.msFieldHead small { font-size: 11px; color: #94a3b8; line-height: 1.45; }
+.msSwitchMini { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #475569; white-space: nowrap; }
+.msSwitchMini input { width: 13px; height: 13px; }
+.msUrl em { font-style: normal; font-size: 11px; color: #1d7a4f; }
+.msAdvanced {
+  justify-self: start; border: 0; background: transparent; color: #475569;
+  font-size: 12px; padding: 2px 0; cursor: pointer;
+}
+.msAdvanced:hover { color: #1d4ed8; }
+.msFootNote { margin-right: auto; font-size: 11px; color: #94a3b8; line-height: 1.4; }
+.msFoot { align-items: center; }
+@media (max-width: 640px) {
+  .msFootNote { display: none; }
+}
+
+.msHintTextInline { font-size: 11px; color: #94a3b8; line-height: 1.5; }

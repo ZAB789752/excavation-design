@@ -1156,8 +1156,11 @@ def export_simplified_ifc(
     building = w.entity(f"IFCBUILDING({_step_string(_guid())},#{owner},'Foundation Pit Support Model',$,$,#{building_place},$,$,.ELEMENT.,$,$,$)")
     # 三层而不是一层：Revit / Navisworks 打开后能按标高过滤，
     # 排桩、等代墙、冠梁支撑各归各层，不再是所有构件堆在一个 storey 里。
-    crown_levels = [float(beam.elevation) for beam in (project.retaining_system.crown_beams or [])]
-    support_levels = [float(item.elevation) for item in (project.retaining_system.supports or [])]
+    # A project that has not been designed yet has no retaining system: still emit the
+    # three empty storeys so the IFC opens instead of crashing the BIM endpoint.
+    retaining = project.retaining_system
+    crown_levels = [float(beam.elevation) for beam in ((retaining.crown_beams if retaining else None) or [])]
+    support_levels = [float(item.elevation) for item in ((retaining.supports if retaining else None) or [])]
     storey_specs = [
         ("Piles", (min(crown_levels) if crown_levels else 0.0) - 0.45),
         ("Calculation wall (equivalent)", 0.0),
@@ -1199,6 +1202,8 @@ def export_simplified_ifc(
     concrete_product_ids: list[int] = []
     steel_product_ids: list[int] = []
     rebar_product_ids: list[int] = []
+    # Set once the wall loop runs; an empty project never reaches it.
+    wall_product_ids: list[int] = []
 
     support_quality = evaluate_support_layout_quality(project) if project.retaining_system else None
     support_metrics = dict(support_quality.metrics or {}) if support_quality else {}
