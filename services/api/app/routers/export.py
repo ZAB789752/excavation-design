@@ -70,6 +70,10 @@ def export_simplified_ifc(*args, **kwargs):
     return _lazy_call("app.ifc.exporter", "export_simplified_ifc", *args, **kwargs)
 
 
+def _pile_row_spec(*args, **kwargs):
+    return _lazy_call("app.ifc.exporter", "_pile_row_spec", *args, **kwargs)
+
+
 def build_rebar_ifc_visualization(*args, **kwargs):
     return _lazy_call("app.ifc.rebar_visualization", "build_rebar_ifc_visualization", *args, **kwargs)
 
@@ -480,6 +484,127 @@ def _design_quantity_compare(rows: list[dict], project) -> dict:
     }
 
 
+def _segment_point_distance(ax: float, ay: float, bx: float, by: float, px: float, py: float) -> float:
+    dx, dy = bx - ax, by - ay
+    length2 = dx * dx + dy * dy
+    if length2 <= 1e-12:
+        return math.hypot(px - ax, py - ay)
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length2))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def _segments_cross(a: tuple[float, float], b: tuple[float, float],
+                    c: tuple[float, float], d: tuple[float, float]) -> bool:
+    def cross(o, p, q) -> float:
+        return (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0])
+
+    d1, d2 = cross(c, d, a), cross(c, d, b)
+    d3, d4 = cross(a, b, c), cross(a, b, d)
+    return ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0))
+
+
+def _geometry_clash_check(project) -> dict:
+    """模型几何自检：构件有没有真打架。
+
+    支撑立柱本来就穿撑（设计节点），那不算冲突；这里查的是三件会真出事的事：
+    立柱压在围护桩上、同标高支撑互相穿插、桩顶与冠梁脱空或嵌入过深。
+    """
+    system = getattr(project, "retaining_system", None)
+    if system is None:
+        return {}
+    walls = list(getattr(system, "diaphragm_walls", None) or [])
+    columns = list(getattr(system, "columns", None) or [])
+    supports = list(getattr(system, "supports", None) or [])
+    crown_beams = list(getattr(system, "crown_beams", None) or [])
+    if not walls and not columns and not supports:
+        return {}
+
+    try:
+        spec = _pile_row_spec(project)
+    except Exception:
+        spec = {}
+    spacing = max(float(spec.get("spacingM") or 0.9), 0.3)
+    diameter = float(spec.get("diameterM") or 0.7)
+
+    pile_centres: list[tuple[float, float]] = []
+    for wall in walls:
+        points = list(getattr(getattr(wall, "axis", None), "points", []) or [])
+        for left, right in zip(points[:-1], points[1:]):
+            ax, ay = float(left.x), float(left.y)
+            bx, by = float(right.x), float(right.y)
+            length = math.hypot(bx - ax, by - ay)
+            if length <= 1e-9:
+                continue
+            count = max(2, int(round(length / spacing)) + 1)
+            step = length / (count - 1)
+            ux, uy = (bx - ax) / length, (by - ay) / length
+            for index in range(count):
+                pile_centres.append((ax + ux * step * index, ay + uy * step * index))
+
+    conflicts: list[dict] = []
+    checked = 0
+
+    # 1) 立柱 vs 围护桩：净距小于 100 mm 记冲突
+    for column in columns:
+        cx, cy = float(column.location.x), float(column.location.y)
+        radius = float(getattr(getattr(column, "section", None), "diameter", None) or 0.8) / 2.0
+        for px, py in pile_centres:
+            checked += 1
+            gap = math.hypot(cx - px, cy - py) - radius - diameter / 2.0
+            if gap < 0.10:
+                conflicts.append({
+                    "type": "column_vs_pile",
+                    "a": column.code,
+                    "clearanceM": round(gap, 3),
+                    "at": [round(cx, 3), round(cy, 3)],
+                })
+
+    # 2) 同标高支撑互相穿插
+    for index, first in enumerate(supports):
+        ax, ay = float(first.start.x), float(first.start.y)
+        bx, by = float(first.end.x), float(first.end.y)
+        for second in supports[index + 1:]:
+            if abs(float(first.elevation) - float(second.elevation)) > 0.01:
+                continue
+            checked += 1
+            if _segments_cross((ax, ay), (bx, by),
+                               (float(second.start.x), float(second.start.y)),
+                               (float(second.end.x), float(second.end.y))):
+                conflicts.append({"type": "strut_vs_strut", "a": first.code, "b": second.code})
+
+    # 3) 桩顶与冠梁底：应嵌入 50 mm，脱空或超 200 mm 都算异常
+    crown_bottoms = [
+        float(beam.elevation) - float(getattr(getattr(beam, "section", None), "height", None) or 0.0) / 2.0
+        for beam in crown_beams
+    ]
+    if crown_bottoms and walls:
+        crown_bottom = min(crown_bottoms)
+        pile_top = crown_bottom - 0.05
+        for wall in walls:
+            wall_top = float(getattr(wall, "top_elevation", 0.0))
+            checked += 1
+            embed = crown_bottom - min(wall_top, pile_top)
+            if embed < 0.0 or embed > 0.2:
+                conflicts.append({
+                    "type": "pile_top_vs_crown",
+                    "a": getattr(wall, "panel_code", "?"),
+                    "clearanceM": round(embed, 3),
+                })
+
+    for item in conflicts[:10]:
+        item.setdefault("b", None)
+
+    return {
+        "clash": {
+            "checkedPairs": checked,
+            "count": len(conflicts),
+            "status": "pass" if not conflicts else "review",
+            "items": conflicts[:10],
+            "basis": "立柱距围护桩净距 ≥100 mm；同标高支撑不得相交；桩顶嵌入冠梁 0–200 mm",
+        }
+    }
+
+
 def _rebar_quantity_summary(ledger: list, project) -> dict:
     groups: dict[tuple[str, float], dict] = {}
     for item in ledger or []:
@@ -585,6 +710,7 @@ def generate_bim_model(
             "summary": getattr(check, "summary", None),
         },
         "rebarQuantity": _rebar_quantity_summary(ledger, project),
+        **(_geometry_clash_check(project)),
         "notes": notes,
         "formalConstructionIssue": False,
     }

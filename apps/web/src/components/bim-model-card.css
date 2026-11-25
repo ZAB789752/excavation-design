@@ -20,6 +20,16 @@
 .bimQuantity strong.warn { color: #b45309; }
 .bimQuantity em { font-style: normal; font-size: 11px; color: #94a3b8; overflow: hidden; text-overflow: ellipsis; }
 
+.bimClash {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 12px; border-radius: 10px; font-size: 12px;
+}
+.bimClash.pass { background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; }
+.bimClash.review { background: #fffbeb; border: 1px solid #fde68a; color: #b45309; }
+.bimClash span { color: #475569; }
+.bimClash strong { font-size: 13px; }
+.bimClash em { font-style: normal; margin-left: auto; color: #94a3b8; font-size: 11px; }
+
 /* 工作区被助手面板挤到 460px 时，三维预览只剩 380px 宽，看不清整个基坑 */
 .bimPreviewFull {
   position: fixed; inset: 12px; z-index: 9998;

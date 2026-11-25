@@ -49,6 +49,13 @@ type BimResult = {
   columnCount: number;
   validation: { score?: number; status?: string; summary?: string };
   rebarQuantity?: RebarQuantity;
+  clash?: {
+    checkedPairs: number;
+    count: number;
+    status: string;
+    items: Array<Record<string, unknown>>;
+    basis: string;
+  };
   notes: string[];
 };
 
@@ -150,6 +157,15 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
                   </em>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+          {result.clash ? (
+            <div className={`bimClash ${result.clash.status === 'pass' ? 'pass' : 'review'}`}>
+              <span>几何校核</span>
+              <strong>
+                {result.clash.checkedPairs.toLocaleString()} 对构件 · {result.clash.count === 0 ? '无冲突' : `${result.clash.count} 处冲突`}
+              </strong>
+              <em>{result.clash.basis}</em>
             </div>
           ) : null}
           {result.notes?.length ? (

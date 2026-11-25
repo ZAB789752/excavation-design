@@ -799,6 +799,7 @@ export const api = {
         pile?: { count: number; ifcKg: number; theoryKg: number; diffPct: number; kgPerM?: number | null; basis: string };
         supportLongitudinal?: { ifcKg: number; schemeKg: number; diffPct: number; status: string };
       };
+      clash?: { checkedPairs: number; count: number; status: string; items: Array<Record<string, unknown>>; basis: string };
       notes: string[];
     }>(`/api/projects/${projectId}/export/bim?profile=${profile}`, {
       method: 'POST', timeoutMs: 300000, responseIdleTimeoutMs: 300000,
