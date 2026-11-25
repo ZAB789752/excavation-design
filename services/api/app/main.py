@@ -161,6 +161,9 @@ for _router in (
 app.include_router(one_strut_router)
 from app.agents.router import router as agent_router
 app.include_router(agent_router)
+# M3 物理研究接口（上游能力，合并 AI 层时保留）
+from app.agents.m3_router import router as m3_agent_router
+app.include_router(m3_agent_router)
 
 if PRODUCT_MODE == "full":
     from app.routers import (
