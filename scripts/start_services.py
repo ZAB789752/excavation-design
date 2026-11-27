@@ -23,13 +23,23 @@ BREAKAWAY = 0x01000000
 env = {k.upper(): v for k, v in os.environ.items()}
 env.update({
     "PITGUARD_LLM_ENABLE": "1",
-    "PITGUARD_LLM_API_KEY": "sk-c4e22f2a2865e9b35d8220f67627ad1292226edff5082431ecb3e3f7e663d79f",
     "PITGUARD_LLM_MODEL_FAST": "deepseek-v4.1-flash-1017",
     "PITGUARD_LLM_BASE_URL": "https://discovery-api.intern-ai.org.cn/v1",
     "PITGUARD_LLM_ALLOWED_HOSTS": "discovery-api.intern-ai.org.cn",
     "PITGUARD_LLM_TIMEOUT": "60",
     "PITGUARD_LLM_MAX_TOKENS": "2000",
 })
+
+# API key 只从本机环境变量读。这个仓库是公开的，任何写进文件的 key 都等于公开。
+# 设置一次即可（新开终端生效）：setx PITGUARD_LLM_API_KEY "sk-..."
+KEY_ENV = "PITGUARD_LLM_API_KEY"
+if os.environ.get(KEY_ENV):
+    env[KEY_ENV] = os.environ[KEY_ENV]
+else:
+    env.pop(KEY_ENV, None)
+    print(f"[warn] {KEY_ENV} 未设置：LLM 相关功能会不可用。\n"
+          f'       设置方法：setx {KEY_ENV} "sk-..."（新开终端生效）',
+          file=sys.stderr)
 
 
 def spawn(name: str, args: list[str], cwd: Path, log_name: str) -> int:
