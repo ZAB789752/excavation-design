@@ -137,10 +137,13 @@ def test_support_cage_emits_longitudinal_bars_and_closed_hoops() -> None:
         writer, owner=1, context=1, storey_place=0, support=support, max_per_support=400,
     )
 
-    # 纵筋 16 + 两侧分布筋 6 行 × 2 = 12 + 箍筋 19 站 × 4 段
-    assert len(bars) == 16 + 12 + 76
+    # 纵筋 16 + 两侧分布筋 6 行 × 2 = 12 + 箍筋 19 站
+    # 一道闭合箍 = 一个空心环实体（而不是 4 段），所以箍筋按站数计。
+    assert len(bars) == 16 + 12 + 19
     text = "\n".join(writer.lines)
-    assert text.count("IFCCIRCLEPROFILEDEF") == len(bars)
+    assert text.count("IFCREINFORCINGBAR") == len(bars)
+    assert text.count("IFCCIRCLEPROFILEDEF") == 16 + 12
+    assert text.count("IFCARBITRARYPROFILEDEFWITHVOIDS") == 19
     assert "IFCRECTANGLEPROFILEDEF" not in text
 
 
@@ -164,10 +167,12 @@ def test_beam_cage_emits_longitudinal_and_stirrups() -> None:
     writer = _writer_with_style()
     bars = _emit_beam_cage_bars(writer, owner=1, context=1, storey_place=0, beam=beam)
 
-    # 纵筋 12 + 两侧分布 2×4 + 箍筋 120 站 × 4 段
-    assert len(bars) == 12 + 8 + 480
+    # 直筋 100 根（圆截面）+ 闭合箍 375 站（空心环），单构件上限 400 根封顶
+    assert len(bars) == 100 + 375
     text = "\n".join(writer.lines)
-    assert text.count("IFCCIRCLEPROFILEDEF") == len(bars)
+    assert text.count("IFCREINFORCINGBAR") == len(bars)
+    assert text.count("IFCCIRCLEPROFILEDEF") == 100
+    assert text.count("IFCARBITRARYPROFILEDEFWITHVOIDS") == 375
     assert "IFCRECTANGLEPROFILEDEF" not in text
 
 
@@ -218,12 +223,15 @@ def test_pile_row_exports_circular_piles_and_cages() -> None:
         writer, owner=1, context=1, storey_place=0, wall=wall, spec=spec,
     )
 
-    # 9 m / 0.9 m 间距 → 11 根桩；每根 18 主筋 + 5 环×6 + 4 加强箍×6
+    # 9 m / 0.9 m 间距 → 11 根桩；每根 18 主筋 + 1 道螺旋箍 + 4 道加强箍（空心圆环）
     assert len(piles) == 11
-    assert len(bars) == 11 * (18 + 30 + 24)
+    assert len(bars) == 11 * (18 + 1 + 4)
     text = "\n".join(writer.lines)
+    assert text.count("IFCREINFORCINGBAR") == len(bars)
     assert text.count("IFCPILE") == 11
-    assert text.count("IFCCIRCLEPROFILEDEF") == 11 + len(bars)
+    assert text.count("IFCCIRCLEPROFILEDEF") == 11 + 11 * 18
+    assert text.count("IFCSWEPTDISKSOLID") == 11
+    assert text.count("IFCCIRCLEHOLLOWPROFILEDEF") == 11 * 4
     assert "IFCRECTANGLEPROFILEDEF" not in text
 
 

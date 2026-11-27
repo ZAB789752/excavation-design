@@ -12,6 +12,7 @@ import ConstructionStageEditor from '../components/ConstructionStageEditor';
 import DesignCoreWorkflowPanel, { type PrimaryDesignStageKey } from '../components/DesignCoreWorkflowPanel';
 import PanelErrorBoundary from '../app/PanelErrorBoundary';
 import AssistantPanel from '../features/agent/AssistantPanel';
+import BimModelCard from '../components/BimModelCard';
 import { sanitizeCandidatePlanGeometry } from '../drawing/candidateGeometry';
 
 const GeologyViewer = lazy(() => import('../viewers/GeologyViewer'));
@@ -559,6 +560,7 @@ export default function CoreProjectWorkspace({ project, onBack, onProjectChange 
           <button disabled={!current.retainingSystem} onClick={() => void runTask('生成协调模型', 'export_ifc_construction_visual', {}, true)}><strong>协调模型</strong><span>IFC · 协调参考</span></button>
           <button disabled={!latest} onClick={() => void runTask('生成项目管理者成果包', 'export_coordinated_delivery', { issueMode: 'review', includeIfcProfiles: false, managerReadable: true }, true)}><strong>审查成果包</strong><span>项目摘要 + 图纸 + 计算书</span></button>
         </div>
+        <BimModelCard projectId={current.id} />
       </section> : null}
     </section>
     </div>

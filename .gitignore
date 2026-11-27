@@ -17,6 +17,7 @@ verification-output/
 *.sqlite3-shm
 *.sqlite3-wal
 services/api/artifacts/
+services/api/runtime_cache/
 services/api/exports/*
 !services/api/exports/.gitkeep
 exports/*

@@ -818,11 +818,6 @@ export const api = {
   formalDrawingPackageUrl: (projectId: string, issueMode: 'review' | 'construction' = 'review', rebarMode: 'conservative' | 'balanced' | 'economic' = 'balanced') => `${API_BASE}/api/projects/${projectId}/export/formal-drawing-package?issue_mode=${issueMode}&rebar_mode=${rebarMode}`,
   coordinatedDeliveryPackageUrl: (projectId: string, issueMode: 'review' | 'construction' = 'review', rebarMode: 'conservative' | 'balanced' | 'economic' = 'balanced') => `${API_BASE}/api/projects/${projectId}/export/coordinated-delivery-package?issue_mode=${issueMode}&rebar_mode=${rebarMode}&include_ifc_profiles=true`,
   rebarDetailingPackageUrl: (projectId: string, mode: 'conservative' | 'balanced' | 'economic' = 'balanced') => `${API_BASE}/api/projects/${projectId}/export/rebar-detailing-package?mode=${mode}`,
-  getAssurance: (projectId: string) => request<AssuranceResult>(`/api/projects/${projectId}/assurance/gap-analysis`),
-  getIndustrialReadiness: (projectId: string, includeDetailing = false, runQualification = false) => request<IndustrialReadinessResult>(`/api/projects/${projectId}/industrial/readiness?includeDetailing=${includeDetailing}&runQualification=${runQualification}`),
-  runIndustrialQualification: (projectId: string) => request<Record<string, unknown>>(`/api/projects/${projectId}/industrial/qualification`, { method: 'POST' }),
-  runIndustrialClosure: (projectId: string) => request<IndustrialReadinessResult>(`/api/projects/${projectId}/industrial/closure`, { method: 'POST' }),
-  getMonitoringControl: (projectId: string) => request<MonitoringControlResult>(`/api/projects/${projectId}/advanced/monitoring/control`),
   generateBimModel: (projectId: string, profile: 'detailed' | 'visual' | 'light' = 'detailed') =>
     request<{
       profile: string; mode: string; description: string; filename: string; sizeMB: number;
@@ -830,10 +825,25 @@ export const api = {
       wallCount: number; beamCount: number; columnCount: number;
       counts: Record<string, number>;
       validation: { score?: number; status?: string; summary?: string };
+      rebarQuantity?: {
+        totalKg: number; totalT: number;
+        byType: Array<{ barType: string; diameterMm: number; count: number; lengthM: number; kg: number }>;
+        pile?: { count: number; ifcKg: number; theoryKg: number; diffPct: number; kgPerM?: number | null; basis: string };
+        supportLongitudinal?: { ifcKg: number; schemeKg: number; diffPct: number; status: string };
+      };
+      clash?: { checkedPairs: number; count: number; status: string; items: Array<Record<string, unknown>>; basis: string };
       notes: string[];
     }>(`/api/projects/${projectId}/export/bim?profile=${profile}`, {
       method: 'POST', timeoutMs: 300000, responseIdleTimeoutMs: 300000,
       activity: { label: '正在生成 BIM 模型' } }),
+  // 页面内预览用：命中已生成的文件就直接发，不重新生成、不往项目里写导出记录
+  bimModelFileUrl: (projectId: string, mode: string) =>
+    `${API_BASE}/api/projects/${projectId}/export/bim/file?mode=${encodeURIComponent(mode)}`,
+  getAssurance: (projectId: string) => request<AssuranceResult>(`/api/projects/${projectId}/assurance/gap-analysis`),
+  getIndustrialReadiness: (projectId: string, includeDetailing = false, runQualification = false) => request<IndustrialReadinessResult>(`/api/projects/${projectId}/industrial/readiness?includeDetailing=${includeDetailing}&runQualification=${runQualification}`),
+  runIndustrialQualification: (projectId: string) => request<Record<string, unknown>>(`/api/projects/${projectId}/industrial/qualification`, { method: 'POST' }),
+  runIndustrialClosure: (projectId: string) => request<IndustrialReadinessResult>(`/api/projects/${projectId}/industrial/closure`, { method: 'POST' }),
+  getMonitoringControl: (projectId: string) => request<MonitoringControlResult>(`/api/projects/${projectId}/advanced/monitoring/control`),
   createTask: (projectId: string, operation: string, payload?: Record<string, unknown>) => request<PitTask>(`/api/projects/${projectId}/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, payload: payload ?? {} }) }),
   createCandidateComparisonBatch: (projectId: string, topN = 3, useCache = true) => request<{ projectId: string; taskCount: number; tasks: PitTask[] }>(`/api/projects/${projectId}/tasks/candidate-comparison-batch`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topN, useCache }) }),
   getTask: (taskId: string) => request<PitTask>(`/api/tasks/${taskId}`, { timeoutMs: 10000, activity: { quiet: true, cacheTtlMs: 0 } }),

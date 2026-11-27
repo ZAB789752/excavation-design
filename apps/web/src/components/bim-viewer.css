@@ -1,12 +1,16 @@
 .bimViewer {
   position: relative;
+  width: 100%;
+  grid-column: 1 / -1;
   border: 1px solid #e5eaf0;
   border-radius: 12px;
   overflow: hidden;
   background: #f7fafc;
+  /* 指针在模型上时，中键/滚轮不应该带着整页一起动 */
+  overscroll-behavior: contain;
 }
 .bimViewerHost { position: absolute; inset: 0; }
-.bimViewerHost canvas { display: block; }
+.bimViewerHost canvas { display: block; touch-action: none; width: 100%; height: 100%; }
 
 .bimViewerOverlay {
   position: absolute; inset: 0;
@@ -29,4 +33,97 @@
   position: absolute; left: 10px; bottom: 10px;
   background: rgba(255, 255, 255, .92); border: 1px solid #e5eaf0;
   border-radius: 8px; padding: 3px 9px; font-size: 11px; color: #475569;
+  /* 纯展示元素不要接手鼠标事件，否则在它上面按住中键就拖不动模型 */
+  pointer-events: none;
 }
+
+.bimViewerModes {
+  position: absolute; right: 10px; top: 10px;
+  display: inline-flex; gap: 2px; padding: 2px;
+  background: rgba(255, 255, 255, .94); border: 1px solid #e5eaf0;
+  border-radius: 8px;
+}
+.bimViewerModes button {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 3px 9px; border-radius: 6px;
+  font-size: 11px; color: #64748b;
+}
+.bimViewerModes button:hover { background: #eff4f9; color: #334155; }
+.bimViewerModes button.active { background: #1d4ed8; color: #fff; }
+
+.bimViewerLegend {
+  position: absolute; right: 10px; bottom: 10px;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 4px 10px; border-radius: 8px;
+  background: rgba(255, 255, 255, .93); border: 1px solid #e5eaf0;
+  font-size: 11px; color: #475569;
+  pointer-events: none;
+}
+.bimViewerLegend span { display: inline-flex; align-items: center; gap: 4px; }
+.bimViewerLegend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.bimViewerLegend em { font-style: normal; color: #94a3b8; }
+/* 属性卡打开时图例往左让，不然两者在右下角叠在一起 */
+.bimViewerLegend.shifted { right: 284px; }
+
+/* 剖切：沿进深切一刀，看桩、墙、支撑的剖面关系 */
+.bimViewerSection {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px; border-radius: 8px;
+  background: rgba(255, 255, 255, .94); border: 1px solid #e5eaf0;
+  font-size: 11px; color: #475569;
+}
+.bimViewerSection label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.bimViewerSection input[type="range"] { width: 108px; accent-color: #1d4ed8; }
+.bimViewerSection input[type="checkbox"] { accent-color: #1d4ed8; }
+
+/* 点选构件后的属性卡：从模型追溯回计算书的那一层 */
+.bimViewerProps {
+  position: absolute; right: 10px; top: 44px;
+  width: min(262px, calc(100% - 20px));
+  /* 上边让开模式按钮(44px)，下边只留 10px：440 高的嵌入视图里也能把整张桩属性卡放完 */
+  max-height: calc(100% - 54px);
+  display: flex; flex-direction: column;
+  background: rgba(255, 255, 255, .97);
+  border: 1px solid #dbe4ee; border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .08);
+  font-size: 11.5px; color: #334155;
+}
+.bimViewerProps header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 6px;
+  padding: 8px 8px 7px 10px; border-bottom: 1px solid #eef2f7;
+}
+.bimViewerProps header strong { display: block; font-size: 12.5px; color: #0f172a; }
+.bimViewerProps header span { display: block; margin-top: 2px; font-size: 10.5px; color: #94a3b8; }
+.bimViewerProps header button {
+  border: 0; background: transparent; cursor: pointer; line-height: 1;
+  font-size: 15px; color: #94a3b8; padding: 0 2px;
+}
+.bimViewerProps header button:hover { color: #334155; }
+
+.bimViewerPropsBody { overflow: auto; padding: 6px 10px 9px; }
+.bimViewerPropsId {
+  margin: 0 0 5px; font-size: 10px; color: #94a3b8;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.bimViewerProps section { margin-bottom: 8px; }
+.bimViewerProps section:last-child { margin-bottom: 2px; }
+.bimViewerProps h4 {
+  margin: 0 0 4px; font-size: 10.5px; font-weight: 600; color: #1d4ed8;
+  letter-spacing: .2px;
+}
+.bimViewerProps dl { margin: 0; }
+.bimViewerProps dl > div {
+  display: grid; grid-template-columns: 46% 54%; gap: 4px;
+  padding: 1px 0; border-bottom: 1px dashed #f1f5f9;
+}
+.bimViewerProps dl > div:last-child { border-bottom: 0; }
+.bimViewerProps dt { color: #64748b; overflow: hidden; text-overflow: ellipsis; }
+.bimViewerProps dd {
+  margin: 0; color: #0f172a; word-break: break-word;
+  /* 说明类字段是整段文字（"根据布置……"），不夹住会把整张卡撑成一篇文章 */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.bimViewerPropsEmpty { margin: 6px 0; color: #94a3b8; }

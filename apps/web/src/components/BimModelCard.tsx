@@ -12,6 +12,28 @@ const PROFILES: Array<{ id: Profile; name: string; hint: string }> = [
   { id: 'light', name: '轻量协调', hint: '只出构件与参数，不含逐根钢筋' },
 ];
 
+type QuantityRow = { barType: string; diameterMm: number; count: number; lengthM: number; kg: number };
+
+type RebarQuantity = {
+  totalKg: number;
+  totalT: number;
+  byType: QuantityRow[];
+  pile?: {
+    count: number;
+    ifcKg: number;
+    theoryKg: number;
+    diffPct: number;
+    kgPerM?: number | null;
+    basis: string;
+  };
+  supportLongitudinal?: {
+    ifcKg: number;
+    schemeKg: number;
+    diffPct: number;
+    status: string;
+  };
+};
+
 type BimResult = {
   profile: string;
   mode: string;
@@ -26,6 +48,14 @@ type BimResult = {
   beamCount: number;
   columnCount: number;
   validation: { score?: number; status?: string; summary?: string };
+  rebarQuantity?: RebarQuantity;
+  clash?: {
+    checkedPairs: number;
+    count: number;
+    status: string;
+    items: Array<Record<string, unknown>>;
+    basis: string;
+  };
   notes: string[];
 };
 
@@ -35,6 +65,7 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
   const [error, setError] = useState('');
   const [result, setResult] = useState<BimResult | null>(null);
   const [preview, setPreview] = useState<'' | 'design_detailed' | 'coordination_light'>('');
+  const [full, setFull] = useState(false);
 
   async function generate() {
     setBusy(true);
@@ -100,6 +131,43 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
               下载 IFC
             </a>
           </div>
+          {result.rebarQuantity ? (
+            <div className="bimQuantity">
+              <div>
+                <span>钢筋总量</span>
+                <strong>{result.rebarQuantity.totalT} t</strong>
+                <em>{result.rebarQuantity.byType.length} 类规格</em>
+              </div>
+              {result.rebarQuantity.pile?.kgPerM ? (
+                <div>
+                  <span>桩身含钢量</span>
+                  <strong>{result.rebarQuantity.pile.kgPerM} kg/m</strong>
+                  <em>{result.rebarQuantity.pile.count} 根 · 模型与设计参数一致</em>
+                </div>
+              ) : null}
+              {result.rebarQuantity.supportLongitudinal ? (
+                <div>
+                  <span>纵筋量 vs 配筋方案</span>
+                  <strong className={result.rebarQuantity.supportLongitudinal.status === 'pass' ? 'ok' : 'warn'}>
+                    {result.rebarQuantity.supportLongitudinal.diffPct > 0 ? '+' : ''}
+                    {result.rebarQuantity.supportLongitudinal.diffPct}%
+                  </strong>
+                  <em>
+                    {Math.round(result.rebarQuantity.supportLongitudinal.ifcKg / 100) / 10} t / {Math.round(result.rebarQuantity.supportLongitudinal.schemeKg / 100) / 10} t
+                  </em>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {result.clash ? (
+            <div className={`bimClash ${result.clash.status === 'pass' ? 'pass' : 'review'}`}>
+              <span>几何校核</span>
+              <strong>
+                {result.clash.checkedPairs.toLocaleString()} 对构件 · {result.clash.count === 0 ? '无冲突' : `${result.clash.count} 处冲突`}
+              </strong>
+              <em>{result.clash.basis}</em>
+            </div>
+          ) : null}
           {result.notes?.length ? (
             <ul className="bimNotes">
               {result.notes.map((note) => <li key={note}>{note}</li>)}
@@ -121,11 +189,15 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
               {preview === 'coordination_light' ? '收起轻量预览' : '轻量预览（快）'}
             </button>
             <small>含钢筋的预览首次解析约 20–60 秒；轻量档位只出构件。</small>
+            {preview ? <button type="button" onClick={() => setFull((value) => !value)}>{full ? '退出全屏' : '全屏查看'}</button> : null}
           </div>
           {preview ? (
-            <Suspense fallback={<p className="bimHint">正在加载三维查看器…</p>}>
-              <BimViewer url={`${api.exportUrl(projectId, 'ifc')}?mode=${preview}`} height={440} />
-            </Suspense>
+            <div className={full ? 'bimPreviewFull' : undefined}>
+              {full ? <button type="button" className="bimFullClose" onClick={() => setFull(false)}>退出全屏</button> : null}
+              <Suspense fallback={<p className="bimHint">正在加载三维查看器…</p>}>
+                <BimViewer url={api.bimModelFileUrl(projectId, preview)} height={440} />
+              </Suspense>
+            </div>
           ) : null}
         </div>
       ) : null}
