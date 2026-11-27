@@ -50,3 +50,30 @@ def test_bim_generate_returns_model_summary_and_download_url(api):
     again = api.post(f'/api/projects/{project_id}/export/bim?profile=light', headers=headers())
     assert again.status_code == 200
     assert again.json()['cached'] is True
+
+
+def test_preview_file_reuses_the_generated_model_without_saving_the_project(api):
+    created = api.post('/api/projects', json={'name': 'BIM 预览'}, headers=headers())
+    assert created.status_code in (200, 201)
+    project_id = created.json()['id']
+    generated = api.post(f'/api/projects/{project_id}/export/bim?profile=light', headers=headers())
+    assert generated.status_code == 200, generated.text
+
+    def stamp():
+        payload = api.get(f'/api/projects/{project_id}', headers=headers()).json()
+        return payload.get('revision'), payload.get('updated_at') or payload.get('updatedAt')
+
+    stamp()  # 先读一次，避开首次加载时的惰性迁移
+    before = stamp()
+
+    # 页面内预览每打开一次就取一次文件：它只能读，不能往项目里写导出记录
+    preview = api.get(f'/api/projects/{project_id}/export/bim/file?mode=coordination_light', headers=headers())
+    assert preview.status_code == 200, preview.text
+    assert preview.content.startswith(b'ISO-10303-21')
+    assert stamp() == before
+
+    # 对照：显式导出是一次正式动作，它会记录清单并保存项目。
+    # 有这一条，上面那句"没有保存"才不是空话。
+    download = api.get(f'/api/projects/{project_id}/export/ifc?mode=coordination_light', headers=headers())
+    assert download.status_code == 200, download.text
+    assert stamp() != before

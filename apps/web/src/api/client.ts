@@ -836,6 +836,9 @@ export const api = {
     }>(`/api/projects/${projectId}/export/bim?profile=${profile}`, {
       method: 'POST', timeoutMs: 300000, responseIdleTimeoutMs: 300000,
       activity: { label: '正在生成 BIM 模型' } }),
+  // 页面内预览用：命中已生成的文件就直接发，不重新生成、不往项目里写导出记录
+  bimModelFileUrl: (projectId: string, mode: string) =>
+    `${API_BASE}/api/projects/${projectId}/export/bim/file?mode=${encodeURIComponent(mode)}`,
   getAssurance: (projectId: string) => request<AssuranceResult>(`/api/projects/${projectId}/assurance/gap-analysis`),
   getIndustrialReadiness: (projectId: string, includeDetailing = false, runQualification = false) => request<IndustrialReadinessResult>(`/api/projects/${projectId}/industrial/readiness?includeDetailing=${includeDetailing}&runQualification=${runQualification}`),
   runIndustrialQualification: (projectId: string) => request<Record<string, unknown>>(`/api/projects/${projectId}/industrial/qualification`, { method: 'POST' }),

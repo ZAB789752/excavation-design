@@ -645,6 +645,31 @@ def _exporter_revision() -> str:
         return "unknown"
 
 
+def _bim_signature(project, mode: str) -> str:
+    # 用计算版本而不是 updated_at：保存清单会刷新时间戳，导致缓存永远不命中
+    calc = project.calculation_results[-1] if project.calculation_results else None
+    design_version = getattr(calc, "id", "") if calc else ""
+    rebar_version = len(getattr(project.retaining_system, "diaphragm_walls", []) or []) if project.retaining_system else 0
+    # 末尾的 n2 是清单文案的版本：改了 notes 的措辞要让它变，旧缓存才会重新生成
+    return f"{project.id}|{design_version}|{rebar_version}|{mode}|bim-{_exporter_revision()}-n2"
+
+
+def _cached_bim_summary(project_id: str, project, mode: str) -> dict | None:
+    """与当前设计签名一致的已生成模型记录；签名变了或文件不在就返回 None。"""
+    sidecar = EXPORT_DIR / f"{project_id}_{mode}.bim.json"
+    if not sidecar.is_file():
+        return None
+    try:
+        cached = json.loads(sidecar.read_text(encoding="utf-8"))
+        if cached.get("signature") != _bim_signature(project, mode):
+            return None
+        if not Path(cached.get("path", "")).is_file():
+            return None
+        return cached
+    except Exception:
+        return None
+
+
 @router.post("/bim")
 def generate_bim_model(
     project_id: str,
@@ -657,21 +682,13 @@ def generate_bim_model(
     mode, description = BIM_PROFILES[profile]
     project = repo.require(project_id)
 
-    # 用计算版本而不是 updated_at：保存清单会刷新时间戳，导致缓存永远不命中
-    calc = project.calculation_results[-1] if project.calculation_results else None
-    design_version = getattr(calc, "id", "") if calc else ""
-    rebar_version = len(getattr(project.retaining_system, "diaphragm_walls", []) or []) if project.retaining_system else 0
-    signature = f"{project.id}|{design_version}|{rebar_version}|{mode}|bim-{_exporter_revision()}"
+    cached = _cached_bim_summary(project_id, project, mode)
+    if cached is not None:
+        summary_cached = dict(cached.get("summary") or {})
+        summary_cached["cached"] = True
+        return summary_cached
+    signature = _bim_signature(project, mode)
     sidecar = EXPORT_DIR / f"{project_id}_{mode}.bim.json"
-    if sidecar.is_file():
-        try:
-            cached = json.loads(sidecar.read_text(encoding="utf-8"))
-            if cached.get("signature") == signature and Path(cached.get("path", "")).is_file():
-                summary_cached = dict(cached.get("summary") or {})
-                summary_cached["cached"] = True
-                return summary_cached
-        except Exception:
-            pass
 
     ledger: list[dict] = []
     path, check = _export_ifc_with_check(project, mode, ledger=ledger)
@@ -686,7 +703,7 @@ def generate_bim_model(
     if piles:
         notes.append("计算按等代地下连续墙，BIM 按排桩表达；两者在构件属性中分别标注。")
     if rebar:
-        notes.append("钢筋按主筋/箍筋/加强箍分色；查看器默认透视，可切换实体、透视与只看钢筋。")
+        notes.append("钢筋按主筋/箍筋/加强箍分色；查看器默认实体显示，可切换透视与只看钢筋。")
         notes.append("闭合箍筋按一道一个实体统计（不是四段直筋），因此钢筋根数按构件数计。")
     if piles:
         notes.append("桩箍筋为整根螺旋（IfcSweptDiskSolid），圈数按设计间距，不是示意抽样。")
@@ -725,3 +742,23 @@ def generate_bim_model(
     except Exception:
         pass
     return summary
+
+
+@router.get("/bim/file", include_in_schema=False)
+def download_bim_model_file(
+    project_id: str,
+    mode: Literal["coordination_light", "analysis_model", "design_detailed", "construction_visual"] = Query("design_detailed", description="BIM 模型档位对应的导出模式"),
+    repo: ProjectRepository = Depends(get_repository),
+) -> FileResponse:
+    """给页面内预览取模型文件：命中缓存就直接发，不重新生成。
+
+    和 `/ifc` 的区别是这里只读——不记导出清单、不保存项目。
+    预览每打开一次就走一遍 `/ifc`，等于看一眼模型就往项目里写一条导出记录，
+    还要重算 20 MB 的文件。
+    """
+    project = repo.require(project_id)
+    cached = _cached_bim_summary(project_id, project, mode)
+    path = Path(cached.get("path", "")) if cached is not None else None
+    if path is None or not path.is_file():
+        path, _check = _export_ifc_with_check(project, mode)
+    return FileResponse(path=path, filename=path.name, media_type="application/octet-stream")

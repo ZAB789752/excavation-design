@@ -195,7 +195,7 @@ export default function BimModelCard({ projectId }: { projectId: string }) {
             <div className={full ? 'bimPreviewFull' : undefined}>
               {full ? <button type="button" className="bimFullClose" onClick={() => setFull(false)}>退出全屏</button> : null}
               <Suspense fallback={<p className="bimHint">正在加载三维查看器…</p>}>
-                <BimViewer url={`${api.exportUrl(projectId, 'ifc')}?mode=${preview}`} height={440} />
+                <BimViewer url={api.bimModelFileUrl(projectId, preview)} height={440} />
               </Suspense>
             </div>
           ) : null}
